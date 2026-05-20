@@ -30,7 +30,7 @@ jobs:
         run: npm run build:renderer
 
       - name: Package macOS app
-        run: npx electron-builder --mac --x64 --arm64
+        run: npx electron-builder --mac --x64 --arm64 --publish never
         env:
           # No code signing — produces an unsigned dmg suitable for personal
           # or closed-beta distribution. Users will need to right-click → Open
@@ -65,7 +65,7 @@ jobs:
         run: npm run build:renderer
 
       - name: Package Windows app
-        run: npx electron-builder --win --x64
+        run: npx electron-builder --win --x64 --publish never
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
