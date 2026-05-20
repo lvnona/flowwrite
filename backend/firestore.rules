@@ -1,0 +1,49 @@
+rules_version = '2';
+
+// FlowWrite Firestore security rules — Architecture A (no Cloud Functions).
+//
+// Roles:
+//   owner — the authenticated user (reads/updates own doc, increments usage)
+//   admin — hardcoded UID (full read/write/delete on all user docs)
+//
+// Schema fields that only admins may change: plan, status, expiresAt.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+      allow get:    if isOwner(userId) || isAdmin();
+      allow list:   if isAdmin();
+
+      // First sign-in: client creates doc. Plan must be 'free', status 'active'.
+      allow create: if isOwner(userId)
+        && request.resource.data.plan   == 'free'
+        && request.resource.data.status == 'active';
+
+      // Regular user: may update profile fields and usage counters only.
+      // plan / status / expiresAt are admin-only.
+      allow update: if
+        (isOwner(userId)
+          && request.resource.data.plan      == resource.data.plan
+          && request.resource.data.status    == resource.data.status
+          && request.resource.data.expiresAt == resource.data.expiresAt)
+        || isAdmin();
+
+      // Only admin can delete a user record.
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+
+  function isOwner(userId) {
+    return request.auth != null && request.auth.uid == userId;
+  }
+
+  function isAdmin() {
+    return request.auth != null &&
+      request.auth.uid == 'B8npzkB2vdh2DSf52wHZfNmBSS92';
+  }
+}

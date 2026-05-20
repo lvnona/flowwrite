@@ -1,0 +1,75 @@
+name: Build installers
+
+# Runs on every push to main, AND when you create a version tag (v1.0.0).
+# Creates downloadable artifacts: FlowWrite-mac.dmg + FlowWrite-win.exe
+
+on:
+  push:
+    branches: [main]
+    tags:     ['v*']
+  workflow_dispatch:   # lets you trigger a build manually from the GitHub UI
+
+jobs:
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer (Vite)
+        run: npm run build:renderer
+
+      - name: Package macOS app
+        run: npx electron-builder --mac --x64 --arm64
+        env:
+          # No code signing — produces an unsigned dmg suitable for personal
+          # or closed-beta distribution. Users will need to right-click → Open
+          # the first time. Add CSC_LINK / CSC_KEY_PASSWORD secrets to the
+          # repo when you get an Apple Developer certificate.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowWrite-mac
+          path: dist/*.dmg
+          retention-days: 14
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer (Vite)
+        run: npm run build:renderer
+
+      - name: Package Windows app
+        run: npx electron-builder --win --x64
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowWrite-win
+          path: dist/*.exe
+          retention-days: 14
