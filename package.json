@@ -43,7 +43,8 @@
     "productName": "FlowWrite",
     "files": [
       "electron/**/*",
-      "dist/**/*",
+      "dist/index.html",
+      "dist/assets/**/*",
       "public/**/*"
     ],
     "directories": {
@@ -56,6 +57,7 @@
       "hardenedRuntime": true,
       "icon": "public/icons/app-icon.png",
       "artifactName": "FlowWrite-mac.${ext}",
+      "x64ArchFiles": "fn-monitor",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "FlowWrite uses your microphone for voice dictation — your speech is transcribed into text you can edit."
       },

@@ -40,8 +40,8 @@ jobs:
             lipo -info electron/native/fn-monitor
           fi
 
-      - name: Package macOS app (unsigned — no signing secrets configured)
-        run: npx electron-builder --mac --arm64 --publish never
+      - name: Package macOS app — universal (arm64 + x64, unsigned)
+        run: npx electron-builder --mac --universal --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
