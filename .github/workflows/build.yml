@@ -1,24 +1,24 @@
-name: Build installers
+name: Build & Release
 
-# Runs on every push to main, AND when you create a version tag (v1.0.0).
-# Creates downloadable artifacts: FlowWrite-mac.dmg + FlowWrite-win.exe
+# Triggers:
+#   - Push a version tag (v1.2.3) → creates a real GitHub Release with download links
+#   - Push to main → builds artifacts only (no release), useful to verify the build works
+#   - Manual trigger → same as push-to-main
 
 on:
   push:
     branches: [main]
     tags:     ['v*']
-  workflow_dispatch:   # lets you trigger a build manually from the GitHub UI
+  workflow_dispatch:
 
 jobs:
-  # ── macOS ──────────────────────────────────────────────────────────────────
+  # ── macOS (arm64 + x64 universal) ─────────────────────────────────────────
   build-mac:
     runs-on: macos-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
@@ -29,31 +29,49 @@ jobs:
       - name: Build renderer (Vite)
         run: npm run build:renderer
 
+      - name: Compile Fn dictation helper (Swift)
+        run: |
+          if [ -f electron/native/fn-monitor.swift ]; then
+            swiftc -O electron/native/fn-monitor.swift -o electron/native/fn-monitor
+          fi
+
+      # ── Signed build (only when CSC_LINK secret is set) ──────────────────
+      # To enable code signing:
+      #   1. Export your Apple Developer certificate from Keychain as .p12
+      #   2. base64 -i certificate.p12 | pbcopy
+      #   3. Add GitHub Secret CSC_LINK = (that base64 string)
+      #   4. Add GitHub Secret CSC_KEY_PASSWORD = your .p12 export password
       - name: Package macOS app
         run: npx electron-builder --mac --x64 --arm64 --publish never
         env:
-          # No code signing — produces an unsigned dmg suitable for personal
-          # or closed-beta distribution. Users will need to right-click → Open
-          # the first time. Add CSC_LINK / CSC_KEY_PASSWORD secrets to the
-          # repo when you get an Apple Developer certificate.
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          CSC_LINK:          ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD:  ${{ secrets.CSC_KEY_PASSWORD }}
+          # If CSC_LINK is empty, electron-builder skips signing automatically.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
 
-      - name: Upload macOS installer
+      - name: Rename artifact to fixed filename
+        run: |
+          # electron-builder appends arch to the filename — we want one fixed name
+          DMG=$(ls dist/FlowWrite-mac*.dmg 2>/dev/null | head -1)
+          if [ -n "$DMG" ]; then
+            cp "$DMG" dist/FlowWrite-mac.dmg
+            echo "Renamed $DMG → dist/FlowWrite-mac.dmg"
+          fi
+
+      - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlowWrite-mac
-          path: dist/*.dmg
-          retention-days: 14
+          path: dist/FlowWrite-mac.dmg
+          retention-days: 30
 
-  # ── Windows ────────────────────────────────────────────────────────────────
+  # ── Windows x64 NSIS installer ────────────────────────────────────────────
   build-win:
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
@@ -67,9 +85,62 @@ jobs:
       - name: Package Windows app
         run: npx electron-builder --win --x64 --publish never
 
-      - name: Upload Windows installer
+      - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: FlowWrite-win
-          path: dist/*.exe
-          retention-days: 14
+          path: dist/FlowWrite-win-setup.exe
+          retention-days: 30
+
+  # ── GitHub Release (only on version tags: v1.0.0, v1.2.3 …) ─────────────
+  release:
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write      # needed to create releases
+    steps:
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FlowWrite-mac
+          path: release-assets
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FlowWrite-win
+          path: release-assets
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "FlowWrite ${{ github.ref_name }}"
+          body: |
+            ## Download
+
+            | Platform | File |
+            |----------|------|
+            | macOS (Apple Silicon + Intel) | [FlowWrite-mac.dmg](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-mac.dmg) |
+            | Windows 64-bit | [FlowWrite-win-setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-setup.exe) |
+
+            **These URLs always point to the latest version — bookmark them!**
+
+            ### macOS install
+            1. Download `FlowWrite-mac.dmg`
+            2. Open it and drag FlowWrite to Applications
+            3. Right-click the app → Open (first launch only, to bypass Gatekeeper)
+
+            ### Windows install
+            1. Download `FlowWrite-win-setup.exe`
+            2. Run the installer — choose install location
+            3. Launch from Start menu or Desktop shortcut
+          draft: false
+          prerelease: false
+          files: |
+            release-assets/FlowWrite-mac.dmg
+            release-assets/FlowWrite-win-setup.exe
+          fail_on_unmatched_files: false

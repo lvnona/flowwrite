@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('flowwrite', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (next) => ipcRenderer.invoke('save-settings', next),
 
+  // Centralised API keys (admin-managed) pushed from the renderer to main.
+  setApiKeys: (keys) => ipcRenderer.invoke('set-api-keys', keys),
+
   // History
   getHistory: () => ipcRenderer.invoke('get-history'),
   addHistory: (entry) => ipcRenderer.invoke('add-history', entry),
@@ -23,6 +26,10 @@ contextBridge.exposeInMainWorld('flowwrite', {
   getUserTemplates: () => ipcRenderer.invoke('get-user-templates'),
   saveUserTemplate: (t) => ipcRenderer.invoke('save-user-template', t),
   deleteUserTemplate: (id) => ipcRenderer.invoke('delete-user-template', id),
+
+  // Navigation — open the main window on a specific route from any renderer
+  // (e.g., the popup can open the Dashboard to prompt the user to sign in).
+  openMain: (route) => ipcRenderer.invoke('open-main', route),
 
   // Auth — only Google OAuth is supported. Renderer calls signIn() with the
   // OAuth client ID from firebaseConfig.js; we return the Google id_token
@@ -41,6 +48,32 @@ contextBridge.exposeInMainWorld('flowwrite', {
 
   // Auto-fill
   autofillText: (payload) => ipcRenderer.invoke('autofill-text', payload),
+  // Popup "Insert" — hides the popup, restores focus to the previous app,
+  // then pastes the generated text into the field the user was in.
+  insertText: (payload) => ipcRenderer.invoke('insert-text', payload),
+
+  // Voice dictation — renderer records mic audio and sends the bytes here;
+  // main transcribes (OpenAI Whisper) + cleans up grammar, returns the text.
+  // Payload: { audio: Uint8Array, mimeType: string }
+  transcribeAudio: (payload) => ipcRenderer.invoke('transcribe-audio', payload),
+
+  // Lifetime transcriber usage (e.g. { words }).
+  getTranscriberStats: () => ipcRenderer.invoke('get-transcriber-stats'),
+
+  // Fn push-to-talk dictation bar. Main pushes start/stop (driven by the Fn
+  // key); the bar records, transcribes, then inserts at the cursor.
+  onDictationStart: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('dictation:start', listener);
+    return () => ipcRenderer.removeListener('dictation:start', listener);
+  },
+  onDictationStop: (cb) => {
+    const listener = (_e, opts) => cb(opts || {});
+    ipcRenderer.on('dictation:stop', listener);
+    return () => ipcRenderer.removeListener('dictation:stop', listener);
+  },
+  dictationInsert: (text) => ipcRenderer.invoke('dictation-insert', text),
+  dictationCancel: () => ipcRenderer.invoke('dictation-cancel'),
 
   // Popup context — main pushes the detected field/app info to the popup
   // immediately before showing it.

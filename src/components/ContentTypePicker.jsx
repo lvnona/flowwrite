@@ -3,7 +3,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 
-const TYPES = ['Email', 'Bio', 'Description', 'Note', 'Post', 'Message', 'Other'];
+const TYPES = ['Email', 'Bio', 'Description', 'Note', 'Post', 'Message', 'Translate', 'Other'];
 
 export default function ContentTypePicker({ value, onChange }) {
   return (

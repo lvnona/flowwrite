@@ -40,7 +40,7 @@ import GenerateButton from './GenerateButton.jsx';
 import { useClaudeAPI } from '../hooks/useClaudeAPI.js';
 import { useHistory } from '../hooks/useHistory.js';
 import { useUserTemplates, findUserTemplateForApp } from '../hooks/useUserTemplates.js';
-import { buildPrompt } from '../utils/promptBuilder.js';
+import { buildPrompt, LANGUAGES } from '../utils/promptBuilder.js';
 import { detectStyleFor, findTemplate } from '../utils/templates.js';
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -102,6 +102,8 @@ export default function Popup() {
   const [contentType, setContentType] = useState('Email');
   const [tone, setTone] = useState('Professional');
   const [length, setLength] = useState('Medium');
+  const [translateTo, setTranslateTo] = useState('English');
+  const [micEnabled, setMicEnabled] = useState(true);
   const [extra, setExtra] = useState('');
   const [generated, setGenerated] = useState('');
   const [visible, setVisible] = useState(true);
@@ -176,6 +178,7 @@ export default function Popup() {
     window.flowwrite?.getSettings?.().then((s) => {
       if (s?.defaultTone && TONES.includes(s.defaultTone)) setTone(s.defaultTone);
       if (s?.defaultLength && LENGTHS.includes(s.defaultLength)) setLength(s.defaultLength);
+      setMicEnabled(s?.transcriberEnabled !== false);
     });
   }, []);
 
@@ -214,9 +217,14 @@ export default function Popup() {
     }, 200);
   }
 
-  async function handleGenerate() {
-    // Priority: user's saved example > built-in style by app+contentType > generic.
-    const style = activeUserTemplate
+  async function handleGenerate(overrideInput) {
+    // overrideInput is a string when called right after dictation (avoids
+    // reading stale `extra` state); GenerateButton/Regenerate pass a click
+    // event, so we fall back to `extra` for anything that isn't a string.
+    const input = typeof overrideInput === 'string' ? overrideInput : extra;
+    const isTranslate = contentType === 'Translate';
+    // Priority: translate > user's saved example > built-in style > generic.
+    const style = (isTranslate || activeUserTemplate)
       ? null
       : detectStyleFor(fieldContext?.activeApp, contentType);
     const prompt = buildPrompt(
@@ -224,9 +232,10 @@ export default function Popup() {
       contentType,
       tone,
       length,
-      extra,
+      input,
       style,
-      activeUserTemplate,
+      isTranslate ? null : activeUserTemplate,
+      translateTo,
     );
     setGenerated('');
     generatedRef.current = '';
@@ -248,15 +257,27 @@ export default function Popup() {
     }
   }
 
+  // Called after the popup mic finishes a dictation. In Translate mode we
+  // immediately run the translation on what was spoken (so you speak → see the
+  // translation, no Generate click). In every other mode the transcript just
+  // sits in the box for review (handled by ContextInput via onChange).
+  function handleDictated(text) {
+    if (contentType === 'Translate' && text && text.trim()) {
+      handleGenerate(text);
+    }
+  }
+
   async function handleInsert() {
     const text = generated.trim();
     if (!text || streaming) return;
-    const result = await window.flowwrite?.autofillText?.({ text, targetField: fieldContext });
-    if (result?.tier === 'clipboard-only') {
-      setPasteHint(true);
-    } else {
-      handleClose();
+    // Collapse the card in React; the main process hides the popup window,
+    // restores focus to the app you were in, then pastes into that field.
+    setVisible(false);
+    if (hideTimerRef.current) {
+      clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
     }
+    await window.flowwrite?.insertText?.({ text, targetField: fieldContext });
   }
 
   async function handleCopy() {
@@ -301,9 +322,12 @@ export default function Popup() {
                   contentType, setContentType,
                   tone, setTone,
                   length, setLength,
+                  translateTo, setTranslateTo,
+                  micEnabled,
                   extra, setExtra,
                   streaming,
                   onGenerate: handleGenerate,
+                  onDictated: handleDictated,
                   error,
                   userTemplates,
                   activeUserTemplate,
@@ -381,14 +405,18 @@ function ComposeView({
   contentType, setContentType,
   tone, setTone,
   length, setLength,
+  translateTo, setTranslateTo,
+  micEnabled,
   extra, setExtra,
   streaming,
   onGenerate,
+  onDictated,
   error,
   userTemplates,
   activeUserTemplate,
   onUserTemplateChange,
 }) {
+  const isTranslate = contentType === 'Translate';
   // Compact dropdown layout: one row per control, label on the left, select
   // on the right. Far less vertical space than the pill grids.
   return (
@@ -405,7 +433,7 @@ function ComposeView({
         initial="hidden"
         animate="visible"
       >
-        {userTemplates && userTemplates.length > 0 && (
+        {!isTranslate && userTemplates && userTemplates.length > 0 && (
           <DropRow
             label="Template"
             value={activeUserTemplate?.id ?? ''}
@@ -431,23 +459,34 @@ function ComposeView({
           options={CONTENT_TYPES.map((v) => ({ value: v, label: v }))}
         />
 
-        <DropRow
-          label="Tone"
-          value={tone}
-          onChange={setTone}
-          options={TONES.map((v) => ({ value: v, label: v }))}
-        />
+        {isTranslate ? (
+          <DropRow
+            label="To"
+            value={translateTo}
+            onChange={setTranslateTo}
+            options={LANGUAGES.map((v) => ({ value: v, label: v }))}
+          />
+        ) : (
+          <>
+            <DropRow
+              label="Tone"
+              value={tone}
+              onChange={setTone}
+              options={TONES.map((v) => ({ value: v, label: v }))}
+            />
 
-        <DropRow
-          label="Length"
-          value={length}
-          onChange={setLength}
-          options={LENGTHS.map((v) => ({ value: v, label: v }))}
-        />
+            <DropRow
+              label="Length"
+              value={length}
+              onChange={setLength}
+              options={LENGTHS.map((v) => ({ value: v, label: v }))}
+            />
+          </>
+        )}
 
         <motion.div className="flex flex-col gap-1.5 mt-1" variants={itemVariants}>
-          <h3 className="section-title">Your message</h3>
-          <ContextInput value={extra} onChange={setExtra} />
+          <h3 className="section-title">{isTranslate ? 'Text to translate' : 'Your message'}</h3>
+          <ContextInput value={extra} onChange={setExtra} enabled={micEnabled} onDictated={onDictated} />
         </motion.div>
 
         {error && <ErrorBanner text={error} />}

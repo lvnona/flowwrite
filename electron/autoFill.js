@@ -16,10 +16,11 @@
 //     • Writes text to clipboard, notifies the renderer that the user must paste
 
 import { clipboard } from 'electron';
-import { exec } from 'node:child_process';
+import { exec, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const pexec = promisify(exec);
+const pexecFile = promisify(execFile);
 
 // ─────────────────────────────────────────────────────────
 // Tier 1 — nut-js
@@ -43,7 +44,7 @@ async function loadNutJS() {
   return _kb;
 }
 
-async function fillViaNutJS(text) {
+async function fillViaNutJS(text, { selectAll = true } = {}) {
   const kb = await loadNutJS();
   if (!kb) throw new Error('nut-js unavailable');
 
@@ -54,9 +55,13 @@ async function fillViaNutJS(text) {
 
   const mod = process.platform === 'darwin' ? _Key.LeftCmd : _Key.LeftControl;
 
-  await kb.pressKey(mod, _Key.A);
-  await kb.releaseKey(mod, _Key.A);
-  await delay(20);
+  // Replace mode (popup) selects all first; insert mode (dictation) does not,
+  // so the transcript drops in at the current cursor position.
+  if (selectAll) {
+    await kb.pressKey(mod, _Key.A);
+    await kb.releaseKey(mod, _Key.A);
+    await delay(20);
+  }
   await kb.pressKey(mod, _Key.V);
   await kb.releaseKey(mod, _Key.V);
 }
@@ -65,22 +70,46 @@ async function fillViaNutJS(text) {
 // Tier 2 — AppleScript (macOS only)
 // ─────────────────────────────────────────────────────────
 
-async function fillViaAppleScript(text) {
+async function fillViaAppleScript(text, { selectAll = true } = {}) {
   if (process.platform !== 'darwin') throw new Error('AppleScript: macOS only');
 
   // Write to clipboard first — AppleScript "keystroke" is slow for long text.
   clipboard.writeText(text);
 
   // tell frontmost app to paste. We use delay 0.1 after giving focus back.
+  const selectAllLine = selectAll
+    ? 'keystroke "a" using {command down}\n      delay 0.05'
+    : '';
   const script = `
     delay 0.15
     tell application "System Events"
-      keystroke "a" using {command down}
-      delay 0.05
+      ${selectAllLine}
       keystroke "v" using {command down}
     end tell
   `;
   await pexec(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+}
+
+// ─────────────────────────────────────────────────────────
+// Tier 2 (Windows) — PowerShell SendKeys
+// ─────────────────────────────────────────────────────────
+
+async function fillViaWindows(text, { selectAll = true } = {}) {
+  if (process.platform !== 'win32') throw new Error('SendKeys: Windows only');
+
+  clipboard.writeText(text);
+  // Let focus settle back on the target field after our window hid.
+  await delay(120);
+
+  // SendKeys: ^a = Ctrl+A (select all), ^v = Ctrl+V (paste). Insert mode pastes
+  // at the cursor (no select-all). Strings are PS single-quoted so the carets
+  // are literal; execFile (no shell) avoids cmd.exe caret-escaping issues.
+  const send = selectAll
+    ? "[System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 40; [System.Windows.Forms.SendKeys]::SendWait('^v')"
+    : "[System.Windows.Forms.SendKeys]::SendWait('^v')";
+  const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 60; ${send}`;
+
+  await pexecFile('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script]);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -97,26 +126,31 @@ function fillViaClipboard(text) {
 // Public entry point
 // ─────────────────────────────────────────────────────────
 
-/**
- * @param {string} text          Generated text to inject.
- * @param {object} _targetField  Field context (reserved for future focus-restore).
- * @returns {Promise<{tier: string}>}  Which tier was used.
- */
-export async function autoFillText(text, _targetField) {
+// Shared 3-tier fill chain. `selectAll` distinguishes replace mode (popup,
+// selects the whole field first) from insert mode (dictation, pastes at the
+// cursor without disturbing existing text).
+async function runFill(text, opts) {
   if (!text) return { tier: 'noop' };
 
   // Tier 1 — nut-js
   try {
-    await fillViaNutJS(text);
+    await fillViaNutJS(text, opts);
     return { tier: 'nut-js' };
   } catch (e1) {
     console.info('[FlowWrite] autoFill tier-1 failed, trying tier-2:', e1.message);
   }
 
-  // Tier 2 — AppleScript
+  // Tier 2 — OS-native keystrokes (AppleScript on macOS, SendKeys on Windows)
   try {
-    await fillViaAppleScript(text);
-    return { tier: 'applescript' };
+    if (process.platform === 'darwin') {
+      await fillViaAppleScript(text, opts);
+      return { tier: 'applescript' };
+    }
+    if (process.platform === 'win32') {
+      await fillViaWindows(text, opts);
+      return { tier: 'sendkeys' };
+    }
+    throw new Error('no native keystroke tier for this platform');
   } catch (e2) {
     console.info('[FlowWrite] autoFill tier-2 failed, falling back to clipboard:', e2.message);
   }
@@ -124,6 +158,24 @@ export async function autoFillText(text, _targetField) {
   // Tier 3 — clipboard only
   const mode = fillViaClipboard(text);
   return { tier: mode };
+}
+
+/**
+ * Replace the focused field's contents with `text` (select-all then paste).
+ * Used by the content popup's "Insert".
+ * @returns {Promise<{tier: string}>}  Which tier was used.
+ */
+export async function autoFillText(text, _targetField) {
+  return runFill(text, { selectAll: true });
+}
+
+/**
+ * Insert `text` at the current cursor position (paste only, no select-all).
+ * Used by voice dictation so spoken text drops in wherever you were typing.
+ * @returns {Promise<{tier: string}>}  Which tier was used.
+ */
+export async function insertAtCursor(text) {
+  return runFill(text, { selectAll: false });
 }
 
 function delay(ms) {

@@ -33,6 +33,20 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Invite records created from the admin panel. Admin-only — invited users
+    // never touch this (they just download the app and sign in with Google).
+    match /invites/{inviteId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    // Admin-managed API keys (Anthropic + OpenAI). The Electron app reads this
+    // doc via onSnapshot and pushes the keys into the main process — customers
+    // never see or enter them through the UI. Write is admin-only.
+    match /config/apiKeys {
+      allow read:  if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

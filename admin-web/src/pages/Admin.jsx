@@ -1,30 +1,46 @@
-// FlowWrite Admin Panel — mobile-first responsive layout.
+// FlowWrite Admin Panel — two tabs: Users and API Keys.
 //
-// Features per user row / card:
-//   • Plan selector      (free / pro / team)
-//   • Status toggle      (active / suspended)
-//   • Expiry date picker (null = never)
-//   • Delete button      (with confirmation)
+// Users tab
+//   • Stat cards  (total, paid, active this month, all-time gens)
+//   • User table  (plan, status, expiry, week / month popup requests,
+//                  audio words this month, estimated API cost, joined, last seen)
+//   • Sent invites with Resend + Delete
 //
-// Layout:
-//   Mobile  (< md): stat cards 2×2, users as stacked cards
-//   Desktop (≥ md): stat cards 4×1, users in a table
+// API Keys tab
+//   • Anthropic + OpenAI key editor (stored in Firestore config/apiKeys)
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { signOut } from '../firebase.js';
-import { useAdmin, ADMIN_UID } from '../hooks/useAdmin.js';
+import { useAdmin } from '../hooks/useAdmin.js';
+
+// ── Cost constants (edit to keep in sync with actual API pricing) ─────────────
+// Claude Opus  ≈ $15/MTok in + $75/MTok out; ~500 in + 300 out per popup request
+const COST_PER_POPUP      = 0.030;   // $ per popup generation
+// OpenAI Whisper $0.006/min; gpt-4o-mini polish ~$0.0001/request
+const COST_PER_AUDIO_WORD = 0.000045; // $ per transcribed word
 
 const PLANS = ['free', 'pro', 'team'];
-
 const PLAN_STYLE = {
   free: 'text-white/60 border-white/20 bg-white/5',
   pro:  'text-violet-300 border-violet-400/40 bg-violet-500/10',
   team: 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10',
 };
 
+// ── Date helpers ──────────────────────────────────────────────────────────────
+
 function thisMonthKey() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function thisWeekKey() {
+  const d = new Date();
+  const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utc - yearStart) / 86_400_000) + 1) / 7);
+  return `${utc.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
 }
 
 function fmtDate(ms) {
@@ -47,21 +63,32 @@ function fmtRelative(ms) {
 
 function toInputDate(ms) {
   if (!ms) return '';
-  return new Date(ms).toISOString().split('T')[0]; // YYYY-MM-DD
+  return new Date(ms).toISOString().split('T')[0];
 }
 
-function isExpired(ms) {
-  return ms && ms < Date.now();
+function isExpired(ms) { return ms && ms < Date.now(); }
+
+function fmtCost(n) {
+  if (!n) return '$0.00';
+  if (n < 0.005) return '<$0.01';
+  return `$${n.toFixed(2)}`;
 }
+
+// ── Root component ────────────────────────────────────────────────────────────
 
 export default function AdminPanel({ user }) {
   const {
-    users, loading, error, isAdmin,
-    refresh, updatePlan, updateStatus, updateExpiry, deleteUser,
+    users, invites, loading, error, isAdmin,
+    refresh, inviteUser, resendInvite, deleteInvite,
+    updatePlan, updateStatus, updateExpiry, deleteUser,
+    apiKeys, saveApiKeys,
   } = useAdmin(user);
 
-  const [search, setSearch] = useState('');
+  const [tab, setTab]           = useState('users'); // 'users' | 'apikeys'
+  const [search, setSearch]     = useState('');
+  const [showInvite, setShowInvite] = useState(false);
   const month = thisMonthKey();
+  const week  = thisWeekKey();
 
   const stats = useMemo(() => ({
     total:  users.length,
@@ -97,10 +124,17 @@ export default function AdminPanel({ user }) {
       {/* Header */}
       <header className="sticky top-0 z-10 bg-bg/90 backdrop-blur border-b border-white/10 px-4 py-3 sm:px-6">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-3">
             <span className="text-xl">✨</span>
             <span className="font-semibold text-base sm:text-lg">FlowWrite Admin</span>
+
+            {/* Tabs */}
+            <div className="hidden sm:flex items-center ml-4 bg-white/5 border border-white/10 rounded-xl p-1 gap-1">
+              <TabBtn active={tab === 'users'}   onClick={() => setTab('users')}>Users</TabBtn>
+              <TabBtn active={tab === 'apikeys'} onClick={() => setTab('apikeys')}>API Keys</TabBtn>
+            </div>
           </div>
+
           <div className="flex items-center gap-2">
             {user.photoURL && (
               <img src={user.photoURL} alt="" className="w-7 h-7 rounded-full" referrerPolicy="no-referrer" />
@@ -112,114 +146,159 @@ export default function AdminPanel({ user }) {
             </button>
           </div>
         </div>
+
+        {/* Mobile tabs */}
+        <div className="sm:hidden flex gap-1 mt-2 bg-white/5 border border-white/10 rounded-xl p-1">
+          <TabBtn active={tab === 'users'}   onClick={() => setTab('users')}>Users</TabBtn>
+          <TabBtn active={tab === 'apikeys'} onClick={() => setTab('apikeys')}>API Keys</TabBtn>
+        </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6 sm:px-6">
 
-        {/* Stat cards — 2 cols mobile, 4 cols desktop */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <StatCard label="Total users"       value={stats.total} />
-          <StatCard label="Paid (pro/team)"   value={stats.paid}  accent />
-          <StatCard label="Active this month" value={stats.active} />
-          <StatCard label="All-time gens"     value={stats.gens} />
-        </div>
-
-        {/* Search + refresh */}
-        <div className="flex items-center gap-2 mb-4">
-          <input type="search" placeholder="Search by name or email…"
-            value={search} onChange={(e) => setSearch(e.target.value)}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm
-                       placeholder-white/30 focus:outline-none focus:border-violet-400/50 transition" />
-          <button type="button" onClick={refresh} title="Refresh"
-            className="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl
-                       border border-white/10 bg-white/5 hover:bg-white/10 transition text-base">
-            ↻
-          </button>
-        </div>
-
-        {loading && <div className="py-16 text-center text-white/40 text-sm">Loading users…</div>}
-        {error   && <div className="py-8 text-center text-red-400 text-sm">{error}</div>}
-
-        {!loading && !error && (
+        {/* ── USERS TAB ─────────────────────────────────────────────────── */}
+        {tab === 'users' && (
           <>
-            {/* Desktop table */}
-            <div className="hidden md:block rounded-2xl border border-white/10 overflow-x-auto">
-              <table className="w-full text-sm min-w-[860px]">
-                <thead>
-                  <tr className="text-[10px] uppercase tracking-wider text-white/30 border-b border-white/10 bg-white/[0.025]">
-                    <th className="text-left px-4 py-3">User</th>
-                    <th className="text-left px-4 py-3">Plan</th>
-                    <th className="text-left px-4 py-3">Status</th>
-                    <th className="text-left px-4 py-3">Expires</th>
-                    <th className="text-right px-4 py-3">Month</th>
-                    <th className="text-right px-4 py-3">All time</th>
-                    <th className="text-right px-4 py-3">Joined</th>
-                    <th className="text-right px-4 py-3">Last seen</th>
-                    <th className="px-4 py-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
+            {/* Stat cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <StatCard label="Total users"       value={stats.total} />
+              <StatCard label="Paid (pro/team)"   value={stats.paid}  accent />
+              <StatCard label="Active this month" value={stats.active} />
+              <StatCard label="All-time gens"     value={stats.gens} />
+            </div>
+
+            {/* Search + invite + refresh */}
+            <div className="flex items-center gap-2 mb-4">
+              <input type="search" placeholder="Search by name or email…"
+                value={search} onChange={(e) => setSearch(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm
+                           placeholder-white/30 focus:outline-none focus:border-violet-400/50 transition" />
+              <button type="button" onClick={() => setShowInvite(true)}
+                className="shrink-0 h-10 px-3.5 flex items-center gap-1.5 rounded-xl
+                           bg-violet-500/90 hover:bg-violet-500 text-white text-sm font-medium transition">
+                <span className="text-base leading-none">+</span>
+                <span className="hidden sm:inline">Invite</span>
+              </button>
+              <button type="button" onClick={refresh} title="Refresh"
+                className="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl
+                           border border-white/10 bg-white/5 hover:bg-white/10 transition text-base">
+                ↻
+              </button>
+            </div>
+
+            {loading && <div className="py-16 text-center text-white/40 text-sm">Loading users…</div>}
+            {error   && <div className="py-8 text-center text-red-400 text-sm">{error}</div>}
+
+            {!loading && !error && (
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block rounded-2xl border border-white/10 overflow-x-auto">
+                  <table className="w-full text-sm" style={{ minWidth: 1050 }}>
+                    <thead>
+                      <tr className="text-[10px] uppercase tracking-wider text-white/30 border-b border-white/10 bg-white/[0.025]">
+                        <th className="text-left px-4 py-3">User</th>
+                        <th className="text-left px-4 py-3">Plan</th>
+                        <th className="text-left px-4 py-3">Status</th>
+                        <th className="text-left px-4 py-3">Expires</th>
+                        <th className="text-right px-3 py-3">Week</th>
+                        <th className="text-right px-3 py-3">Month</th>
+                        <th className="text-right px-3 py-3">Audio/mo</th>
+                        <th className="text-right px-3 py-3 text-amber-300/70">Cost/mo</th>
+                        <th className="text-right px-4 py-3">Joined</th>
+                        <th className="text-right px-4 py-3">Last seen</th>
+                        <th className="px-4 py-3"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((u) => (
+                        <DesktopRow key={u.uid} user={u} month={month} week={week}
+                          onPlan={(p)   => updatePlan(u.uid, p)}
+                          onStatus={(s) => updateStatus(u.uid, s)}
+                          onExpiry={(d) => updateExpiry(u.uid, d)}
+                          onDelete={() => deleteUser(u.uid)}
+                        />
+                      ))}
+                      {filtered.length === 0 && (
+                        <tr><td colSpan={11} className="py-12 text-center text-white/30 text-sm">
+                          {search ? 'No matching users.' : 'No users yet.'}
+                        </td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden flex flex-col gap-3">
                   {filtered.map((u) => (
-                    <DesktopRow key={u.uid} user={u} month={month}
-                      onPlan={(p)  => updatePlan(u.uid, p)}
+                    <MobileCard key={u.uid} user={u} month={month} week={week}
+                      onPlan={(p)   => updatePlan(u.uid, p)}
                       onStatus={(s) => updateStatus(u.uid, s)}
                       onExpiry={(d) => updateExpiry(u.uid, d)}
                       onDelete={() => deleteUser(u.uid)}
                     />
                   ))}
                   {filtered.length === 0 && (
-                    <tr><td colSpan={9} className="py-12 text-center text-white/30 text-sm">
+                    <div className="py-12 text-center text-white/30 text-sm">
                       {search ? 'No matching users.' : 'No users yet.'}
-                    </td></tr>
+                    </div>
                   )}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Mobile cards */}
-            <div className="md:hidden flex flex-col gap-3">
-              {filtered.map((u) => (
-                <MobileCard key={u.uid} user={u} month={month}
-                  onPlan={(p)  => updatePlan(u.uid, p)}
-                  onStatus={(s) => updateStatus(u.uid, s)}
-                  onExpiry={(d) => updateExpiry(u.uid, d)}
-                  onDelete={() => deleteUser(u.uid)}
-                />
-              ))}
-              {filtered.length === 0 && (
-                <div className="py-12 text-center text-white/30 text-sm">
-                  {search ? 'No matching users.' : 'No users yet.'}
                 </div>
-              )}
-            </div>
 
-            <p className="text-xs text-white/25 mt-4 text-right">
-              {filtered.length} of {users.length} user{users.length !== 1 ? 's' : ''}
-            </p>
+                <p className="text-xs text-white/25 mt-4 text-right">
+                  {filtered.length} of {users.length} user{users.length !== 1 ? 's' : ''}
+                </p>
+              </>
+            )}
+
+            {/* Sent invites */}
+            {invites.length > 0 && (
+              <InviteList
+                invites={invites}
+                onResend={resendInvite}
+                onDelete={deleteInvite}
+              />
+            )}
           </>
         )}
+
+        {/* ── API KEYS TAB ──────────────────────────────────────────────── */}
+        {tab === 'apikeys' && (
+          <ApiKeysSection apiKeys={apiKeys} saveApiKeys={saveApiKeys} />
+        )}
       </main>
+
+      {showInvite && (
+        <InviteModal onClose={() => setShowInvite(false)} onInvite={inviteUser} />
+      )}
     </div>
   );
 }
 
-// ── Desktop table row ────────────────────────────────────────────────────────
+// ── Tab button ────────────────────────────────────────────────────────────────
 
-function DesktopRow({ user, month, onPlan, onStatus, onExpiry, onDelete }) {
+function TabBtn({ active, onClick, children }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition
+        ${active ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'}`}>
+      {children}
+    </button>
+  );
+}
+
+// ── Desktop table row ─────────────────────────────────────────────────────────
+
+function DesktopRow({ user, month, week, onPlan, onStatus, onExpiry, onDelete }) {
   const [busy, setBusy] = useState(false);
-  const monthUsage = user.usage?.[month] || 0;
-  const suspended  = user.status === 'suspended';
-  const expired    = isExpired(user.expiresAt);
+  const suspended = user.status === 'suspended';
+  const expired   = isExpired(user.expiresAt);
 
-  async function wrap(fn) {
-    setBusy(true);
-    try { await fn(); } finally { setBusy(false); }
-  }
+  const popupMonth = user.usage?.[month]            || 0;
+  const popupWeek  = user.usageWeekly?.[week]       || 0;
+  const audioMonth = user.audioWords?.[month]        || 0;
+  const cost       = popupMonth * COST_PER_POPUP + audioMonth * COST_PER_AUDIO_WORD;
 
-  async function confirmDelete() {
-    if (!window.confirm(`Delete ${user.email}? This cannot be undone.`)) return;
-    await wrap(onDelete);
-  }
+  async function wrap(fn) { setBusy(true); try { await fn(); } finally { setBusy(false); } }
 
   return (
     <tr className={`border-b border-white/5 transition ${suspended ? 'opacity-50' : 'hover:bg-white/[0.02]'}`}>
@@ -241,14 +320,22 @@ function DesktopRow({ user, month, onPlan, onStatus, onExpiry, onDelete }) {
       <td className="px-4 py-3">
         <ExpiryPicker value={user.expiresAt} expired={expired} onChange={(d) => wrap(() => onExpiry(d))} busy={busy} />
       </td>
-      <td className="px-4 py-3 text-right tabular-nums text-white/70">
-        {monthUsage}{user.plan === 'free' && <span className="text-white/30 text-[10px]">/30</span>}
+      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">{popupWeek}</td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/80">
+        {popupMonth}
+        {user.plan === 'free' && <span className="text-white/30 text-[10px]">/30</span>}
       </td>
-      <td className="px-4 py-3 text-right tabular-nums text-white/70">{user.allTimeUsage || 0}</td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">
+        {audioMonth > 0 ? audioMonth.toLocaleString() : '—'}
+      </td>
+      <td className="px-3 py-3 text-right tabular-nums text-amber-300 text-xs font-medium">
+        {fmtCost(cost)}
+      </td>
       <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtDate(user.createdAt)}</td>
       <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtRelative(user.lastSeen)}</td>
       <td className="px-4 py-3 text-right">
-        <button type="button" onClick={confirmDelete} disabled={busy}
+        <button type="button" onClick={() => { if (window.confirm(`Delete ${user.email}? Cannot be undone.`)) wrap(onDelete); }}
+          disabled={busy}
           className="text-[11px] text-red-400/70 hover:text-red-400 border border-red-400/20
                      hover:border-red-400/40 rounded-lg px-2.5 py-1 transition disabled:opacity-40">
           Delete
@@ -258,47 +345,33 @@ function DesktopRow({ user, month, onPlan, onStatus, onExpiry, onDelete }) {
   );
 }
 
-// ── Mobile card ──────────────────────────────────────────────────────────────
+// ── Mobile card ───────────────────────────────────────────────────────────────
 
-function MobileCard({ user, month, onPlan, onStatus, onExpiry, onDelete }) {
+function MobileCard({ user, month, week, onPlan, onStatus, onExpiry, onDelete }) {
   const [busy, setBusy] = useState(false);
   const [showExpiry, setShowExpiry] = useState(false);
-  const monthUsage = user.usage?.[month] || 0;
-  const suspended  = user.status === 'suspended';
-  const expired    = isExpired(user.expiresAt);
+  const suspended = user.status === 'suspended';
+  const expired   = isExpired(user.expiresAt);
 
-  async function wrap(fn) {
-    setBusy(true);
-    try { await fn(); } finally { setBusy(false); }
-  }
+  const popupMonth = user.usage?.[month]      || 0;
+  const popupWeek  = user.usageWeekly?.[week] || 0;
+  const audioMonth = user.audioWords?.[month] || 0;
+  const cost       = popupMonth * COST_PER_POPUP + audioMonth * COST_PER_AUDIO_WORD;
 
-  async function confirmDelete() {
-    if (!window.confirm(`Delete ${user.email}?\nThis cannot be undone.`)) return;
-    await wrap(onDelete);
-  }
+  async function wrap(fn) { setBusy(true); try { await fn(); } finally { setBusy(false); } }
 
   return (
-    <div className={`rounded-2xl border border-white/10 bg-white/[0.03] p-4 transition ${suspended ? 'opacity-60' : ''}`}>
-      {/* Top row: avatar + identity + status badge */}
+    <div className={`rounded-2xl border border-white/10 bg-white/[0.03] p-4 ${suspended ? 'opacity-60' : ''}`}>
       <div className="flex items-start gap-3 mb-3">
         <Avatar user={user} size="md" />
         <div className="flex-1 min-w-0">
           <div className="font-semibold truncate">{user.displayName || '—'}</div>
           <div className="text-xs text-white/40 truncate">{user.email}</div>
-          {suspended && (
-            <span className="inline-block mt-0.5 text-[10px] text-red-400 bg-red-500/10 border border-red-400/30 rounded-full px-2 py-0.5">
-              Suspended
-            </span>
-          )}
-          {expired && !suspended && (
-            <span className="inline-block mt-0.5 text-[10px] text-amber-400 bg-amber-500/10 border border-amber-400/30 rounded-full px-2 py-0.5">
-              Expired
-            </span>
-          )}
+          {suspended && <span className="inline-block mt-0.5 text-[10px] text-red-400 bg-red-500/10 border border-red-400/30 rounded-full px-2 py-0.5">Suspended</span>}
+          {expired && !suspended && <span className="inline-block mt-0.5 text-[10px] text-amber-400 bg-amber-500/10 border border-amber-400/30 rounded-full px-2 py-0.5">Expired</span>}
         </div>
       </div>
 
-      {/* Controls row */}
       <div className="flex items-center gap-2 mb-3 flex-wrap">
         <PlanSelect value={user.plan} onChange={(p) => wrap(() => onPlan(p))} busy={busy} />
         <StatusToggle suspended={suspended} onChange={(s) => wrap(() => onStatus(s))} busy={busy} />
@@ -314,26 +387,105 @@ function MobileCard({ user, month, onPlan, onStatus, onExpiry, onDelete }) {
         </div>
       )}
 
-      {/* Stats */}
       <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
-        <MiniStat label="This month" value={`${monthUsage}${user.plan === 'free' ? '/30' : ''}`} />
-        <MiniStat label="All time"   value={user.allTimeUsage || 0} />
-        <MiniStat label="Joined"     value={fmtDate(user.createdAt)} />
-        <MiniStat label="Last seen"  value={fmtRelative(user.lastSeen)} />
+        <MiniStat label="Popups / week"  value={popupWeek} />
+        <MiniStat label="Popups / month" value={`${popupMonth}${user.plan === 'free' ? '/30' : ''}`} />
+        <MiniStat label="Audio / month"  value={audioMonth > 0 ? `${audioMonth.toLocaleString()} words` : '—'} />
+        <MiniStat label="Est. cost/mo"   value={fmtCost(cost)} highlight />
+        <MiniStat label="Joined"         value={fmtDate(user.createdAt)} />
+        <MiniStat label="Last seen"      value={fmtRelative(user.lastSeen)} />
       </div>
 
-      {/* Delete */}
-      <button type="button" onClick={confirmDelete} disabled={busy}
+      <button type="button" onClick={() => { if (window.confirm(`Delete ${user.email}?\nCannot be undone.`)) wrap(onDelete); }}
+        disabled={busy}
         className="mt-3 w-full text-center text-xs text-red-400/60 hover:text-red-400
-                   border border-red-400/15 hover:border-red-400/30 rounded-xl py-2 transition
-                   disabled:opacity-40">
+                   border border-red-400/15 hover:border-red-400/30 rounded-xl py-2 transition disabled:opacity-40">
         Delete user
       </button>
     </div>
   );
 }
 
-// ── Shared controls ──────────────────────────────────────────────────────────
+// ── Sent-invites list ─────────────────────────────────────────────────────────
+
+function InviteList({ invites, onResend, onDelete }) {
+  const [secret, setSecret] = useState(() => {
+    try { return localStorage.getItem('fw_invite_key') || ''; } catch { return ''; }
+  });
+  const [busyId, setBusyId] = useState(null);
+  const [resentId, setResentId] = useState(null);
+
+  async function handleResend(inv) {
+    if (!secret) {
+      const s = window.prompt('Enter your invite key to resend:');
+      if (!s) return;
+      try { localStorage.setItem('fw_invite_key', s.trim()); } catch { /* ignore */ }
+      setSecret(s.trim());
+    }
+    setBusyId(inv.id);
+    try {
+      await onResend(inv, secret);
+      setResentId(inv.id);
+      setTimeout(() => setResentId(null), 2000);
+    } catch (e) {
+      window.alert(`Resend failed: ${e.message}`);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(inv) {
+    if (!window.confirm(`Remove invite for ${inv.email}?`)) return;
+    setBusyId(inv.id);
+    try { await onDelete(inv.id); } catch { /* ignore */ } finally { setBusyId(null); }
+  }
+
+  return (
+    <div className="mt-8">
+      <h3 className="text-[10px] uppercase tracking-wider text-white/30 mb-2">
+        Sent invites ({invites.length})
+      </h3>
+      <div className="rounded-2xl border border-white/10 divide-y divide-white/5 overflow-hidden">
+        {invites.map((inv) => (
+          <div key={inv.id}
+            className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm hover:bg-white/[0.02] transition">
+            <span className="truncate text-white/80 min-w-0">{inv.email}</span>
+            <span className="flex items-center gap-2 shrink-0">
+              <span className="text-[11px] text-white/30 hidden sm:block">{fmtDate(inv.createdAt)}</span>
+              <span className={`text-[10px] rounded-full px-2 py-0.5 border
+                ${inv.status === 'resent'
+                  ? 'text-sky-300 bg-sky-500/10 border-sky-400/30'
+                  : 'text-violet-300 bg-violet-500/10 border-violet-400/30'}`}>
+                {inv.status || 'sent'}
+              </span>
+              {resentId === inv.id
+                ? <span className="text-[11px] text-emerald-400">✓ Resent</span>
+                : (
+                  <button type="button"
+                    onClick={() => handleResend(inv)}
+                    disabled={busyId === inv.id}
+                    className="text-[11px] text-white/50 hover:text-white border border-white/10
+                               hover:border-white/30 rounded-lg px-2 py-0.5 transition disabled:opacity-40">
+                    {busyId === inv.id ? '…' : 'Resend'}
+                  </button>
+                )
+              }
+              <button type="button"
+                onClick={() => handleDelete(inv)}
+                disabled={busyId === inv.id}
+                className="text-[11px] text-red-400/60 hover:text-red-400 border border-red-400/15
+                           hover:border-red-400/30 rounded-lg px-2 py-0.5 transition disabled:opacity-40">
+                ✕
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Shared controls ───────────────────────────────────────────────────────────
 
 function PlanSelect({ value, onChange, busy }) {
   return (
@@ -353,17 +505,14 @@ function PlanSelect({ value, onChange, busy }) {
 
 function StatusToggle({ suspended, onChange, busy }) {
   return (
-    <button
-      type="button"
-      disabled={busy}
+    <button type="button" disabled={busy}
       onClick={() => onChange(suspended ? 'active' : 'suspended')}
       title={suspended ? 'Click to activate' : 'Click to suspend'}
       className={`text-[11px] font-medium rounded-full px-2.5 py-1 border transition
                   ${busy ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
                   ${suspended
                     ? 'text-red-400 border-red-400/40 bg-red-500/10 hover:bg-red-500/20'
-                    : 'text-emerald-400 border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/20'}`}
-    >
+                    : 'text-emerald-400 border-emerald-400/40 bg-emerald-500/10 hover:bg-emerald-500/20'}`}>
       {suspended ? '✕ Suspended' : '✓ Active'}
     </button>
   );
@@ -372,22 +521,15 @@ function StatusToggle({ suspended, onChange, busy }) {
 function ExpiryPicker({ value, expired, onChange, busy, full }) {
   return (
     <div className={`flex items-center gap-1.5 ${full ? 'w-full' : ''}`}>
-      <input
-        type="date"
-        value={toInputDate(value)}
-        onChange={(e) => onChange(e.target.value || null)}
-        disabled={busy}
+      <input type="date" value={toInputDate(value)}
+        onChange={(e) => onChange(e.target.value || null)} disabled={busy}
         className={`bg-white/5 border rounded-lg px-2 py-1 text-xs text-white/80
-                    focus:outline-none focus:border-violet-400/50 transition
-                    disabled:opacity-50 ${full ? 'flex-1' : 'w-36'}
-                    ${expired ? 'border-amber-400/40 text-amber-300' : 'border-white/15'}`}
-      />
+                    focus:outline-none focus:border-violet-400/50 transition disabled:opacity-50
+                    ${full ? 'flex-1' : 'w-36'}
+                    ${expired ? 'border-amber-400/40 text-amber-300' : 'border-white/15'}`} />
       {value && (
         <button type="button" onClick={() => onChange(null)} disabled={busy}
-          title="Clear expiry"
-          className="text-white/30 hover:text-white/70 text-xs transition disabled:opacity-40">
-          ✕
-        </button>
+          className="text-white/30 hover:text-white/70 text-xs transition disabled:opacity-40">✕</button>
       )}
     </div>
   );
@@ -397,9 +539,7 @@ function Avatar({ user, size }) {
   const cls = size === 'md'
     ? 'w-10 h-10 rounded-full shrink-0 text-sm font-semibold'
     : 'w-7 h-7 rounded-full shrink-0 text-xs font-semibold';
-  if (user.photoURL) {
-    return <img src={user.photoURL} alt="" className={cls} referrerPolicy="no-referrer" />;
-  }
+  if (user.photoURL) return <img src={user.photoURL} alt="" className={cls} referrerPolicy="no-referrer" />;
   return (
     <div className={`${cls} bg-white/10 flex items-center justify-center`}>
       {(user.displayName || user.email || '?')[0].toUpperCase()}
@@ -407,11 +547,11 @@ function Avatar({ user, size }) {
   );
 }
 
-function MiniStat({ label, value }) {
+function MiniStat({ label, value, highlight }) {
   return (
     <div>
       <div className="text-[10px] uppercase tracking-wider text-white/30 mb-0.5">{label}</div>
-      <div className="text-sm font-medium text-white/80">{value}</div>
+      <div className={`text-sm font-medium ${highlight ? 'text-amber-300' : 'text-white/80'}`}>{value}</div>
     </div>
   );
 }
@@ -421,6 +561,307 @@ function StatCard({ label, value, accent }) {
     <div className={`rounded-2xl p-4 border ${accent ? 'bg-violet-500/10 border-violet-400/30' : 'bg-white/[0.04] border-white/10'}`}>
       <div className="text-2xl sm:text-3xl font-bold tabular-nums">{value}</div>
       <div className="text-[10px] uppercase tracking-wider text-white/40 mt-1 leading-tight">{label}</div>
+    </div>
+  );
+}
+
+// ── API Keys section ──────────────────────────────────────────────────────────
+
+const OPENAI_MODELS = [
+  { value: 'gpt-4o',       label: 'GPT-4o (best quality)' },
+  { value: 'gpt-4o-mini',  label: 'GPT-4o Mini (faster / cheaper)' },
+  { value: 'gpt-4-turbo',  label: 'GPT-4 Turbo' },
+];
+
+function ApiKeysSection({ apiKeys, saveApiKeys }) {
+  const [draft, setDraft] = useState({
+    popupProvider:    'claude',
+    anthropic:        '',
+    openaiPopup:      '',
+    openaiPopupModel: 'gpt-4o',
+    openai:           '',
+  });
+  const [populated, setPopulated] = useState(false);
+  const [busy, setBusy]   = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err,  setErr]    = useState('');
+
+  // One-time populate from Firestore once loaded.
+  useEffect(() => {
+    if (populated) return;
+    const hasData = apiKeys.anthropic || apiKeys.openaiPopup || apiKeys.openai || apiKeys.popupProvider;
+    if (hasData) {
+      setDraft({
+        popupProvider:    apiKeys.popupProvider    || 'claude',
+        anthropic:        apiKeys.anthropic        || '',
+        openaiPopup:      apiKeys.openaiPopup      || '',
+        openaiPopupModel: apiKeys.openaiPopupModel || 'gpt-4o',
+        openai:           apiKeys.openai           || '',
+      });
+      setPopulated(true);
+    }
+  }, [apiKeys, populated]);
+
+  function set(field) { return (v) => setDraft((d) => ({ ...d, [field]: v })); }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setErr('');
+    setBusy(true);
+    try {
+      await saveApiKeys(draft);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e2) {
+      setErr(e2.message || 'Failed to save keys.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const isClaude = draft.popupProvider === 'claude';
+
+  return (
+    <div className="max-w-xl">
+      <h2 className="text-base font-semibold mb-1">API Keys</h2>
+      <p className="text-xs text-white/40 mb-6 leading-relaxed">
+        Stored securely in Firestore and synced to the app automatically.
+        Customers never see or enter them. Changes take effect within seconds
+        for any signed-in user.
+      </p>
+
+      <form onSubmit={handleSave} className="flex flex-col gap-5">
+
+        {/* ── Section 1: Popup AI ───────────────────────────────────────── */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-5">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-white/30 mb-3">
+              Popup AI — text generation
+            </div>
+
+            {/* Provider selector */}
+            <div className="mb-5">
+              <span className="block text-[10px] uppercase tracking-wider text-white/40 mb-2">
+                AI Provider
+              </span>
+              <div className="flex gap-2">
+                {[
+                  { value: 'claude', label: 'Claude (Anthropic)', color: 'violet' },
+                  { value: 'openai', label: 'ChatGPT (OpenAI)',   color: 'emerald' },
+                ].map(({ value, label, color }) => {
+                  const active = draft.popupProvider === value;
+                  const ring = color === 'violet'
+                    ? 'border-violet-400/60 bg-violet-500/15 text-violet-200'
+                    : 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200';
+                  return (
+                    <button key={value} type="button"
+                      onClick={() => setDraft((d) => ({ ...d, popupProvider: value }))}
+                      className={`flex-1 rounded-xl border px-3 py-2.5 text-sm font-medium transition
+                        ${active ? ring : 'border-white/10 bg-white/5 text-white/40 hover:text-white/60 hover:border-white/20'}`}>
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Claude key (shown when provider = claude) */}
+            {isClaude && (
+              <KeyField
+                label="Anthropic API Key"
+                hint="Used for all popup generation (Claude Opus)."
+                placeholder="sk-ant-api03-…"
+                value={draft.anthropic}
+                onChange={set('anthropic')}
+              />
+            )}
+
+            {/* OpenAI popup key + model (shown when provider = openai) */}
+            {!isClaude && (
+              <div className="flex flex-col gap-4">
+                <KeyField
+                  label="OpenAI API Key (popup)"
+                  hint="Used for popup text generation via ChatGPT."
+                  placeholder="sk-proj-…"
+                  value={draft.openaiPopup}
+                  onChange={set('openaiPopup')}
+                />
+                <label className="block">
+                  <span className="text-[10px] uppercase tracking-wider text-white/40">Model</span>
+                  <select
+                    value={draft.openaiPopupModel}
+                    onChange={(e) => setDraft((d) => ({ ...d, openaiPopupModel: e.target.value }))}
+                    className="mt-1.5 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5
+                               text-sm focus:outline-none focus:border-violet-400/50 transition">
+                    {OPENAI_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
+          </div>
+
+          {/* Cost reference */}
+          <div className="pt-1 border-t border-white/5">
+            <div className="text-[10px] uppercase tracking-wider text-white/25 mb-2">
+              Estimated cost per popup request (used in Users tab)
+            </div>
+            <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5 inline-block">
+              <div className="text-[10px] text-white/40 mb-0.5">Per generation</div>
+              <div className="text-sm font-mono text-amber-300">${COST_PER_POPUP.toFixed(3)}</div>
+              <div className="text-[10px] text-white/25 mt-0.5">
+                {isClaude ? 'Claude Opus est.' : 'GPT-4o est.'}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Section 2: Audio Transcription ───────────────────────────── */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-5">
+          <div className="text-[10px] uppercase tracking-wider text-white/30 mb-1">
+            Audio Transcription add-on
+          </div>
+          <KeyField
+            label="OpenAI API Key (Whisper)"
+            hint="Used for Fn-key voice dictation (Whisper) and grammar cleanup."
+            placeholder="sk-proj-…"
+            value={draft.openai}
+            onChange={set('openai')}
+          />
+          <div className="pt-1 border-t border-white/5">
+            <div className="text-[10px] uppercase tracking-wider text-white/25 mb-2">
+              Estimated cost per transcribed word (used in Users tab)
+            </div>
+            <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5 inline-block">
+              <div className="text-[10px] text-white/40 mb-0.5">Per audio word</div>
+              <div className="text-sm font-mono text-amber-300">${COST_PER_AUDIO_WORD.toFixed(6)}</div>
+              <div className="text-[10px] text-white/25 mt-0.5">Whisper est.</div>
+            </div>
+          </div>
+        </div>
+
+        {err && (
+          <div className="text-xs text-red-400 bg-red-500/10 border border-red-400/20 rounded-lg px-3 py-2">
+            {err}
+          </div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={busy}
+            className="px-5 py-2 rounded-xl bg-violet-500/90 hover:bg-violet-500 text-white
+                       text-sm font-medium transition disabled:opacity-50">
+            {busy ? 'Saving…' : 'Save keys'}
+          </button>
+          {saved && <span className="text-xs text-emerald-400">✓ Saved — live within seconds</span>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function KeyField({ label, hint, placeholder, value, onChange }) {
+  const [show, setShow] = useState(false);
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase tracking-wider text-white/40">{label}</span>
+      {hint && <span className="block text-[11px] text-white/30 mt-0.5 mb-1.5">{hint}</span>}
+      <div className="flex items-center gap-2">
+        <input
+          type={show ? 'text' : 'password'}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          spellCheck={false}
+          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm font-mono
+                     placeholder-white/20 focus:outline-none focus:border-violet-400/50 transition"
+        />
+        <button type="button" onClick={() => setShow((v) => !v)}
+          className="shrink-0 text-xs text-white/30 hover:text-white/70 border border-white/10
+                     rounded-lg px-2.5 py-2 transition hover:border-white/20">
+          {show ? 'Hide' : 'Show'}
+        </button>
+      </div>
+    </label>
+  );
+}
+
+// ── Invite modal ──────────────────────────────────────────────────────────────
+
+function InviteModal({ onClose, onInvite }) {
+  const [email,  setEmail]  = useState('');
+  const [secret, setSecret] = useState(() => {
+    try { return localStorage.getItem('fw_invite_key') || ''; } catch { return ''; }
+  });
+  const [busy, setBusy] = useState(false);
+  const [err,  setErr]  = useState('');
+  const [sent, setSent] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr('');
+    setBusy(true);
+    try {
+      try { localStorage.setItem('fw_invite_key', secret.trim()); } catch { /* ignore */ }
+      await onInvite(email, secret.trim());
+      setSent(true);
+      setTimeout(onClose, 1300);
+    } catch (e2) {
+      setErr(e2.message || 'Failed to send invite.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#15131f] p-6"
+        onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Invite new user</h2>
+          <button type="button" onClick={onClose} className="text-white/40 hover:text-white transition">✕</button>
+        </div>
+
+        {sent ? (
+          <div className="py-8 text-center text-emerald-300 text-sm">✓ Invite sent to {email}</div>
+        ) : (
+          <form onSubmit={submit} className="flex flex-col gap-4">
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wider text-white/40">Email address</span>
+              <input type="email" required autoFocus value={email}
+                onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com"
+                className="mt-1.5 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm
+                           placeholder-white/25 focus:outline-none focus:border-violet-400/50 transition" />
+            </label>
+
+            <label className="block">
+              <span className="text-[10px] uppercase tracking-wider text-white/40">Invite key</span>
+              <input type="password" required value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+                placeholder="matches INVITE_SECRET in send-invite.php"
+                className="mt-1.5 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm font-mono
+                           placeholder-white/25 focus:outline-none focus:border-violet-400/50 transition" />
+              <span className="block mt-1 text-[11px] text-white/30">
+                Saved on this device. Must match <code>INVITE_SECRET</code> in send-invite.php.
+              </span>
+            </label>
+
+            {err && (
+              <div className="text-xs text-red-400 bg-red-500/10 border border-red-400/20 rounded-lg px-3 py-2">
+                {err}
+              </div>
+            )}
+
+            <button type="submit" disabled={busy}
+              className="w-full py-2.5 rounded-xl bg-violet-500/90 hover:bg-violet-500 text-white
+                         text-sm font-medium transition disabled:opacity-50">
+              {busy ? 'Sending…' : 'Send invite'}
+            </button>
+          </form>
+        )}
+      </div>
     </div>
   );
 }

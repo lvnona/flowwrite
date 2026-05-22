@@ -4,3 +4,6 @@ release/
 .env
 .DS_Store
 *.log
+
+# Compiled native Fn-key helper (built locally / in CI from fn-monitor.swift)
+electron/native/fn-monitor
