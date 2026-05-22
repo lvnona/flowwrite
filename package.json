@@ -1,6 +1,6 @@
 {
   "name": "flowwrite",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "AI writing assistant that lives in your system tray and helps fill any text field with Claude-generated content.",
   "main": "electron/main.js",
   "type": "module",
@@ -54,7 +54,9 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
-      "hardenedRuntime": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "icon": "public/icons/app-icon.png",
       "artifactName": "FlowWrite-mac.${ext}",
