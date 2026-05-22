@@ -516,6 +516,10 @@ ipcMain.handle('set-api-keys', (_e, keys = {}) => {
   return { ok: true };
 });
 
+// App version (shown in the Dashboard footer so users can track which build
+// they're on). app.getVersion() reads the version from package.json.
+ipcMain.handle('get-app-version', () => app.getVersion());
+
 ipcMain.handle('get-history', () => store.get('history'));
 
 ipcMain.handle('add-history', (_e, entry) => {

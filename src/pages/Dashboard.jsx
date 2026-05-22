@@ -37,11 +37,13 @@ export default function Dashboard() {
   // Transcriber word counts come from the main process (electron-store), which
   // counts EVERY dictation source regardless of auth — see main.js.
   const [transcriber, setTranscriber] = useState({ words: 0, weekly: {}, monthly: {} });
+  const [version, setVersion] = useState('');
 
   useEffect(() => {
     window.flowwrite?.getTranscriberStats?.().then((s) => {
       if (s) setTranscriber({ words: 0, weekly: {}, monthly: {}, ...s });
     });
+    window.flowwrite?.getAppVersion?.().then((v) => { if (v) setVersion(v); });
   }, []);
 
   // Cloud-side counters are the source of truth (server enforces them). The
@@ -139,6 +141,13 @@ export default function Dashboard() {
           <li>Hit <span className="text-accent">✓ Insert</span> — it auto-pastes into the field you were just in.</li>
         </ol>
       </Panel>
+
+      <footer className="mt-8 pt-5 border-t border-white/10 flex items-center justify-center gap-2 text-[11px] text-white/35">
+        <span className="font-medium text-white/50">FlowWrite</span>
+        {version && <span className="tabular-nums">v{version}</span>}
+        <span>·</span>
+        <span>Developed by U11</span>
+      </footer>
     </div>
   );
 }

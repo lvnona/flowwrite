@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('flowwrite', {
   saveTemplate: (t) => ipcRenderer.invoke('save-template', t),
   deleteTemplate: (id) => ipcRenderer.invoke('delete-template', id),
 
+  // App version string (for the Dashboard footer).
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+
   // macOS permissions (Permissions tab in Settings)
   getPermissions: () => ipcRenderer.invoke('get-permissions'),
   requestMicrophone: () => ipcRenderer.invoke('request-microphone'),

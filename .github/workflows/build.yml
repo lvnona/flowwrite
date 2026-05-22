@@ -40,10 +40,25 @@ jobs:
             lipo -info electron/native/fn-monitor
           fi
 
-      - name: Package macOS app — universal (arm64 + x64, unsigned)
+      - name: Prepare macOS code-signing (only if the cert secret is set)
+        run: |
+          if [ -n "${{ secrets.APPLE_CERT_P12 }}" ]; then
+            echo "${{ secrets.APPLE_CERT_P12 }}" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            echo "CSC_LINK=$RUNNER_TEMP/cert.p12" >> "$GITHUB_ENV"
+            echo "CSC_KEY_PASSWORD=${{ secrets.APPLE_CERT_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "Developer ID cert loaded -> signed + notarized build."
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "No APPLE_CERT_P12 secret -> unsigned build (Gatekeeper warning will appear)."
+          fi
+
+      - name: Package macOS app — universal (signed + notarized when cert present)
         run: npx electron-builder --mac --universal --publish never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # Read by build/notarize.cjs; empty values make notarization skip.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4

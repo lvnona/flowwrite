@@ -1,6 +1,6 @@
 {
   "name": "flowwrite",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "AI writing assistant that lives in your system tray and helps fill any text field with Claude-generated content.",
   "main": "electron/main.js",
   "type": "module",
@@ -28,6 +28,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
@@ -41,6 +42,7 @@
   "build": {
     "appId": "com.flowwrite.app",
     "productName": "FlowWrite",
+    "afterSign": "build/notarize.cjs",
     "files": [
       "electron/**/*",
       "dist/index.html",
@@ -52,9 +54,8 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist",
       "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "icon": "public/icons/app-icon.png",
       "artifactName": "FlowWrite-mac.${ext}",
       "x64ArchFiles": "fn-monitor",
