@@ -62,11 +62,20 @@ export function buildPrompt(
   templateStyle,
   userTemplate,
   translateTo,
+  emailTemplate,
 ) {
   // Translate mode short-circuits everything else: no style, tone or length —
   // just translate the user's text into the chosen language.
   if (contentType === 'Translate') {
     return buildTranslatePrompt(userInput, translateTo);
+  }
+  // Email template (sender + style example + fixed signature) takes priority for
+  // emails. The signature is appended verbatim AFTER generation (see Popup), so
+  // here we instruct the model to write the body only — no sign-off.
+  if (emailTemplate) {
+    return buildEmailTemplatePrompt({
+      fieldContext, tone, length, userInput, emailTemplate,
+    });
   }
   if (userTemplate && userTemplate.content?.trim()) {
     return buildUserExamplePrompt({
@@ -106,6 +115,58 @@ function buildTranslatePrompt(userInput, translateTo) {
     text,
     `TEXT>>>`,
   ].join('\n');
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 0b. EMAIL TEMPLATE (sender persona + style example + fixed signature)
+// The signature is NOT requested here — it's appended verbatim after the model
+// finishes (so it can never be paraphrased). The model writes the body only.
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildEmailTemplatePrompt({ fieldContext, tone, length, userInput, emailTemplate }) {
+  const lengthGuide = LENGTH_DIRECTIVES[length] || '1 short paragraph';
+  const toneGuide = TONE_GUIDES[tone] || (tone || '').toLowerCase();
+  const sender = (emailTemplate.fromName || '').trim();
+  // Unified templates store the example in `content`; older ones used `example`.
+  const example = (emailTemplate.content || emailTemplate.example || '').trim();
+  const hasDraft = (userInput || '').trim().length > 0;
+
+  return [
+    `You are writing an email on behalf of the sender, in their first-person voice.`,
+    sender ? `\nSENDER (write AS this person): ${sender}` : '',
+    example
+      ? [
+          ``,
+          `STYLE EXAMPLE — match its greeting, tone, structure, formality and rhythm`,
+          `(copy the STYLE, not the words):`,
+          `"""`,
+          example,
+          `"""`,
+        ].join('\n')
+      : '',
+    ``,
+    `STYLE CONTROLS:`,
+    `- Tone: ${tone} — ${toneGuide}. Apply within the sender's style above.`,
+    `- Length: ${lengthGuide}.`,
+    ``,
+    hasDraft
+      ? [
+          `WHAT THIS EMAIL IS ABOUT (the user's topic / draft — write about THIS):`,
+          `"""`,
+          userInput,
+          `"""`,
+        ].join('\n')
+      : `WHAT THIS EMAIL IS ABOUT: (empty — write a sensible, on-brand email for the context.)`,
+    ``,
+    `CRITICAL RULES:`,
+    `1. Write AS the sender, first person. Never reply as if you were the recipient.`,
+    `2. A subject line is welcome — if you include one, put it on the first line prefixed with "Subject: ".`,
+    `3. Write the GREETING and BODY only. Do NOT write any closing or sign-off`,
+    `   (no "Best,", no name, no signature) — a fixed signature is added automatically.`,
+    `   End right after the last body sentence.`,
+    `4. Output ONLY the email. No preamble, no quotes around it, no commentary.`,
+    `5. Sound human — no AI-isms, no "I hope this finds you well".`,
+  ].filter(Boolean).join('\n');
 }
 
 // ────────────────────────────────────────────────────────────────────────────

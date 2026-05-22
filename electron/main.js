@@ -57,11 +57,23 @@ const store = new Store({
       launchAtLogin: false,
     },
     history: [],
-    // User-defined example posts (few-shot style references). Each item:
-    // { id, name, platform, content, notes?, createdAt, updatedAt }
+    // Legacy stores — kept only as a one-time migration source into `templates`.
     userTemplates: [],
-    // Lifetime audio-transcriber usage stats (shown in Settings).
-    transcriberStats: { words: 0 },
+    emailTemplates: [],
+    // Unified templates. Each item:
+    //   { id, name, purpose, platform, content, fromName?, signature?, notes?,
+    //     createdAt, updatedAt }
+    // `purpose` matches a popup Content type (Email/Post/Message/…). When
+    // purpose === 'Email', fromName + signature drive the email behaviour and
+    // the signature is appended verbatim; otherwise `content` is a style example.
+    templates: [],
+    // Set true once legacy userTemplates/emailTemplates have been folded in.
+    templatesMigrated: false,
+    // Audio-transcriber usage stats (shown in Settings + Dashboard).
+    //   words   — lifetime total
+    //   weekly  — { 'YYYY-Www': count } per ISO week
+    //   monthly — { 'YYYY-MM':  count } per calendar month
+    transcriberStats: { words: 0, weekly: {}, monthly: {} },
     // Centralised API keys, set by the admin (in the admin panel → Firestore)
     // and pushed here by the renderer. Customers never see or edit these.
     //
@@ -79,6 +91,20 @@ const store = new Store({
     },
   },
 });
+
+// Date-bucket keys for transcriber stats. ISO week matches the renderer's
+// thisWeekKey() in usageTracking.js so weekly figures line up.
+function monthKey(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function isoWeekKey(d = new Date()) {
+  const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = utc.getUTCDay() || 7;            // Mon=1 … Sun=7
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);  // shift to the week's Thursday
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utc - yearStart) / 86_400_000) + 1) / 7);
+  return `${utc.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
 
 // Holds references so they are not garbage-collected.
 let mainWindow = null;
@@ -341,6 +367,7 @@ app.whenReady().then(() => {
     }
   }
 
+  migrateTemplates();   // fold any legacy templates into the unified store
   createMainWindow();
   popupWindow = createPopupWindow();
   dictationWindow = createDictationWindow();
@@ -543,6 +570,134 @@ ipcMain.handle('delete-user-template', (_e, id) => {
   return updated;
 });
 
+// ── Email templates (sender + style example + fixed signature) ───────────────
+
+ipcMain.handle('get-email-templates', () => store.get('emailTemplates') || []);
+
+ipcMain.handle('save-email-template', (_e, template) => {
+  const list = store.get('emailTemplates') || [];
+  const now = Date.now();
+  const incoming = {
+    name: '',
+    fromName: '',
+    example: '',
+    signature: '',
+    ...template,
+    updatedAt: now,
+  };
+  let updated;
+  if (incoming.id) {
+    const idx = list.findIndex((t) => t.id === incoming.id);
+    if (idx >= 0) {
+      updated = list.slice();
+      updated[idx] = { ...list[idx], ...incoming };
+    } else {
+      updated = [{ ...incoming, createdAt: now }, ...list];
+    }
+  } else {
+    incoming.id = `et-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    incoming.createdAt = now;
+    updated = [incoming, ...list];
+  }
+  store.set('emailTemplates', updated);
+  return updated;
+});
+
+ipcMain.handle('delete-email-template', (_e, id) => {
+  const list = store.get('emailTemplates') || [];
+  const updated = list.filter((t) => t.id !== id);
+  store.set('emailTemplates', updated);
+  return updated;
+});
+
+// ── Unified templates (purpose + platform + style/email fields) ──────────────
+// One collection for all template kinds. `purpose` matches a popup Content type.
+
+ipcMain.handle('get-templates', () => store.get('templates') || []);
+
+ipcMain.handle('save-template', (_e, template) => {
+  const list = store.get('templates') || [];
+  const now = Date.now();
+  const incoming = {
+    name: '',
+    purpose: 'Other',
+    platform: '',
+    content: '',
+    fromName: '',
+    signature: '',
+    notes: '',
+    ...template,
+    updatedAt: now,
+  };
+  let updated;
+  if (incoming.id) {
+    const idx = list.findIndex((t) => t.id === incoming.id);
+    if (idx >= 0) {
+      updated = list.slice();
+      updated[idx] = { ...list[idx], ...incoming };
+    } else {
+      updated = [{ ...incoming, createdAt: now }, ...list];
+    }
+  } else {
+    incoming.id = `tpl-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    incoming.createdAt = now;
+    updated = [incoming, ...list];
+  }
+  store.set('templates', updated);
+  return updated;
+});
+
+ipcMain.handle('delete-template', (_e, id) => {
+  const list = store.get('templates') || [];
+  const updated = list.filter((t) => t.id !== id);
+  store.set('templates', updated);
+  return updated;
+});
+
+/**
+ * One-time migration: fold legacy userTemplates (style examples → purpose
+ * "Post") and emailTemplates (→ purpose "Email") into the unified `templates`
+ * store. Runs once; guarded by the `templatesMigrated` flag so it never
+ * clobbers templates created in the new system.
+ */
+function migrateTemplates() {
+  if (store.get('templatesMigrated')) return;
+  const existing = store.get('templates') || [];
+  const legacyUser = store.get('userTemplates') || [];
+  const legacyEmail = store.get('emailTemplates') || [];
+
+  const fromUser = legacyUser.map((t) => ({
+    id: t.id || `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: t.name || 'Untitled',
+    purpose: 'Post',
+    platform: t.platform || '',
+    content: t.content || '',
+    fromName: '',
+    signature: '',
+    notes: t.notes || '',
+    createdAt: t.createdAt || Date.now(),
+    updatedAt: t.updatedAt || Date.now(),
+  }));
+
+  const fromEmail = legacyEmail.map((t) => ({
+    id: t.id || `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: t.name || 'Untitled',
+    purpose: 'Email',
+    platform: t.platform || '',
+    content: t.example || '',
+    fromName: t.fromName || '',
+    signature: t.signature || '',
+    notes: '',
+    createdAt: t.createdAt || Date.now(),
+    updatedAt: t.updatedAt || Date.now(),
+  }));
+
+  const merged = [...existing, ...fromEmail, ...fromUser];
+  store.set('templates', merged);
+  store.set('templatesMigrated', true);
+  console.info(`[FlowWrite] Migrated ${fromUser.length} example + ${fromEmail.length} email templates → unified store.`);
+}
+
 /**
  * Google OAuth code-flow handler.
  *
@@ -744,11 +899,19 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
       if (cleaned) text = cleaned;
     }
 
-    // Track lifetime words transcribed (shown in Settings → Audio transcriber).
+    // Track words transcribed (shown in Settings → Audio transcriber + the
+    // Dashboard). Counted here in the main process so EVERY dictation source
+    // (popup mic + the Fn dictation bar) is included regardless of auth state.
     if (text) {
       const n = text.split(/\s+/).filter(Boolean).length;
-      const stats = store.get('transcriberStats') || { words: 0 };
+      const stats = store.get('transcriberStats') || { words: 0, weekly: {}, monthly: {} };
       stats.words = (stats.words || 0) + n;
+      stats.weekly = stats.weekly || {};
+      stats.monthly = stats.monthly || {};
+      const wk = isoWeekKey();
+      const mo = monthKey();
+      stats.weekly[wk] = (stats.weekly[wk] || 0) + n;
+      stats.monthly[mo] = (stats.monthly[mo] || 0) + n;
       store.set('transcriberStats', stats);
     }
 

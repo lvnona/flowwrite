@@ -1,24 +1,36 @@
-// Settings page — preferences + account.
-//
-// API key field is gone (the API key lives only on the server now). What
-// remains: hotkey, niche, default tone/length preferences, account info,
-// sign out.
+// Settings page — two tabs:
+//   • General   — account, preferences, audio transcriber, hotkeys, niche.
+//   • Templates — all user templates (any purpose), with purpose + platform
+//                 filters. Each template carries a purpose (Email / Post / …)
+//                 and an optional platform, so they're easy to organise.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { TONES } from '../components/TonePicker.jsx';
 import { LENGTHS } from '../components/LengthPicker.jsx';
 import NavBar from '../components/NavBar.jsx';
+import TemplateModal from '../components/TemplateModal.jsx';
 import { useAuth } from '../hooks/useAuth.js';
+import { useTemplates } from '../hooks/useTemplates.js';
 
 const NICHES = ['Real Estate', 'Recruitment', 'Sales', 'General', 'Custom'];
 
 export default function Settings() {
   const { user, profile, signOut } = useAuth();
+  const { templates, save: saveTemplate, remove: removeTemplate } = useTemplates();
 
+  const [tab, setTab] = useState('general'); // 'general' | 'templates'
   const [settings, setSettings] = useState(null);
   const [saved, setSaved] = useState(false);
   const [stats, setStats] = useState(null);
   const [devices, setDevices] = useState([]);
+  const [editing, setEditing] = useState(null);          // null | 'new' | template
+  const [filterPurpose, setFilterPurpose] = useState('All');
+  const [filterPlatform, setFilterPlatform] = useState('All');
+
+  async function handleDeleteTemplate(t) {
+    if (!confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
+    await removeTemplate(t.id);
+  }
 
   useEffect(() => {
     window.flowwrite?.getSettings?.().then(setSettings);
@@ -52,6 +64,25 @@ export default function Settings() {
       window.flowwrite?.saveSettings?.({ micDeviceId: '' });
     }
   }, [devices, settings?.micDeviceId]);
+
+  // ── Template filtering ──────────────────────────────────────────────────────
+  // Purposes that actually have templates (so we don't show empty filter pills).
+  const purposesPresent = useMemo(
+    () => [...new Set(templates.map((t) => t.purpose).filter(Boolean))],
+    [templates],
+  );
+  // Platforms present within the current purpose filter.
+  const platformsPresent = useMemo(() => {
+    const inScope = templates.filter((t) => filterPurpose === 'All' || t.purpose === filterPurpose);
+    return [...new Set(inScope.map((t) => t.platform).filter(Boolean))];
+  }, [templates, filterPurpose]);
+  const filteredTemplates = useMemo(
+    () => templates.filter((t) =>
+      (filterPurpose === 'All' || t.purpose === filterPurpose) &&
+      (filterPlatform === 'All' || (t.platform || '') === filterPlatform),
+    ),
+    [templates, filterPurpose, filterPlatform],
+  );
 
   if (!settings) {
     return <div className="page-bg p-8 text-white/60">Loading…</div>;
@@ -87,196 +118,351 @@ export default function Settings() {
   return (
     <div className="page-bg p-8 max-w-2xl mx-auto text-white">
       <NavBar active="settings" />
-      <h1 className="text-xl font-semibold mb-2">Settings</h1>
+      <h1 className="text-xl font-semibold mb-3">Settings</h1>
 
-      {/* Account card */}
-      {user && (
-        <div className="mb-6 mt-4 p-4 rounded-xl border border-white/10 bg-white/[0.04] flex items-center gap-4">
-          {user.photoURL && (
-            <img
-              src={user.photoURL}
-              alt=""
-              className="w-10 h-10 rounded-full"
-              referrerPolicy="no-referrer"
-            />
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium truncate">{user.displayName || 'Signed in'}</div>
-            <div className="text-xs text-white/50 truncate">{user.email}</div>
-            <div className="text-[11px] text-white/40 mt-0.5">
-              Plan: <span className="text-accentSoft">{profile?.plan || 'free'}</span>
-            </div>
-          </div>
+      {/* Tab bar */}
+      <div className="flex gap-1 mb-6 p-1 rounded-xl bg-white/[0.04] border border-white/10 w-fit">
+        {[['general', 'General'], ['templates', 'Templates']].map(([id, label]) => (
           <button
+            key={id}
             type="button"
-            className="pill text-[12px]"
-            onClick={signOut}
-            title="Sign out"
+            onClick={() => setTab(id)}
+            className={
+              'px-4 py-1.5 rounded-lg text-[13px] font-medium transition ' +
+              (tab === id ? 'bg-accent text-white' : 'text-white/55 hover:text-white')
+            }
           >
-            Sign out
+            {label}
+            {id === 'templates' && templates.length > 0 && (
+              <span className="ml-1.5 text-[11px] opacity-70">{templates.length}</span>
+            )}
           </button>
-        </div>
+        ))}
+      </div>
+
+      {tab === 'general' && (
+        <>
+          {/* Account card */}
+          {user && (
+            <div className="mb-6 p-4 rounded-xl border border-white/10 bg-white/[0.04] flex items-center gap-4">
+              {user.photoURL && (
+                <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full" referrerPolicy="no-referrer" />
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{user.displayName || 'Signed in'}</div>
+                <div className="text-xs text-white/50 truncate">{user.email}</div>
+                <div className="text-[11px] text-white/40 mt-0.5">
+                  Plan: <span className="text-accentSoft">{profile?.plan || 'free'}</span>
+                </div>
+              </div>
+              <button type="button" className="pill text-[12px]" onClick={signOut} title="Sign out">
+                Sign out
+              </button>
+            </div>
+          )}
+
+          {/* How-it-works banner */}
+          <div className="mb-6 p-4 rounded-xl border border-accent/40 bg-accent/10">
+            <div className="text-sm font-medium mb-1">How FlowWrite works</div>
+            <p className="text-xs text-white/70 leading-relaxed">
+              FlowWrite runs silently in your menu bar. Whenever you want AI help in
+              any app, click into a text field and press{' '}
+              <kbd className="kbd">{hotkeyHuman}</kbd>.
+              The popup detects which app you're in, lets you pick a tone/length,
+              then pastes the generated text into the focused field.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-3 mb-5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 w-4 h-4 accent-accent"
+              checked={settings.launchAtLogin === true}
+              onChange={(e) => saveNow({ launchAtLogin: e.target.checked })}
+            />
+            <span>
+              <span className="block text-sm">
+                Start FlowWrite when I log in to my {navigator.platform.includes('Mac') ? 'Mac' : 'computer'}
+              </span>
+              <span className="block text-[11px] text-white/40">
+                Launches automatically in the background (menu bar / system tray) so
+                it's always ready when you press your hotkey.
+              </span>
+            </span>
+          </label>
+
+          <Field label="Default tone">
+            <select
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
+              value={settings.defaultTone}
+              onChange={(e) => update({ defaultTone: e.target.value })}
+            >
+              {TONES.map((t) => (<option key={t} value={t} className="bg-bg">{t}</option>))}
+            </select>
+          </Field>
+
+          <Field label="Default length">
+            <select
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
+              value={settings.defaultLength}
+              onChange={(e) => update({ defaultLength: e.target.value })}
+            >
+              {LENGTHS.map((l) => (<option key={l} value={l} className="bg-bg">{l}</option>))}
+            </select>
+          </Field>
+
+          {/* ─── Audio transcriber ───────────────────────────────────────── */}
+          <div className="mt-8 mb-4 pt-5 border-t border-white/10">
+            <h2 className="text-sm font-semibold text-white/80">Audio transcriber</h2>
+            <p className="text-[11px] text-white/40 mt-0.5">
+              Voice-to-text for the popup 🎤 button and hold-Fn dictation.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-3 mb-4 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 w-4 h-4 accent-accent"
+              checked={settings.transcriberEnabled !== false}
+              onChange={(e) => update({ transcriberEnabled: e.target.checked })}
+            />
+            <span>
+              <span className="block text-sm">Enable voice transcription</span>
+              <span className="block text-[11px] text-white/40">
+                Master switch for the popup microphone and hold-Fn voice typing.
+                Restart FlowWrite after changing.
+              </span>
+            </span>
+          </label>
+
+          <div className="mb-4 p-3 rounded-xl border border-white/10 bg-white/[0.03] flex items-center justify-between">
+            <span className="text-[11px] uppercase tracking-wider text-white/40">Words transcribed</span>
+            <span className="text-lg font-semibold text-accentSoft tabular-nums">
+              {(stats?.words ?? 0).toLocaleString()}
+            </span>
+          </div>
+
+          <Field label="Microphone input">
+            <select
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
+              value={settings.micDeviceId || ''}
+              onChange={(e) => saveNow({ micDeviceId: e.target.value })}
+            >
+              <option value="" className="bg-bg">Built-in / system default</option>
+              {devices.map((d, i) => (
+                <option key={d.deviceId} value={d.deviceId} className="bg-bg">
+                  {d.label || `Microphone ${i + 1}`}
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-white/40 mt-1">
+              Pick a connected mic (e.g. Bluetooth headset). If it disconnects,
+              FlowWrite automatically switches back to the built-in mic.
+            </p>
+          </Field>
+
+          <label className="flex items-start gap-3 mb-4 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 w-4 h-4 accent-accent"
+              checked={settings.polishDictation !== false}
+              onChange={(e) => update({ polishDictation: e.target.checked })}
+            />
+            <span>
+              <span className="block text-sm">Clean up dictation grammar</span>
+              <span className="block text-[11px] text-white/40">
+                After transcribing your voice, fix punctuation/grammar and remove
+                filler words ("um", "uh"). Turn off for word-for-word transcripts.
+              </span>
+            </span>
+          </label>
+
+          <Field label="Dictation shortcut">
+            <DictationShortcut
+              value={settings.dictationHotkey || ''}
+              onChange={(v) => saveNow({ dictationHotkey: v })}
+            />
+          </Field>
+
+          <Field label="Manual hotkey">
+            <input
+              type="text"
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
+              value={settings.hotkey || ''}
+              onChange={(e) => update({ hotkey: e.target.value })}
+              placeholder="CommandOrControl+Shift+W"
+            />
+            <p className="text-[11px] text-white/40 mt-1">
+              Restart FlowWrite for hotkey changes to take effect.
+            </p>
+          </Field>
+
+          <Field label="Your niche">
+            <select
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
+              value={settings.niche}
+              onChange={(e) => update({ niche: e.target.value })}
+            >
+              {NICHES.map((n) => (<option key={n} value={n} className="bg-bg">{n}</option>))}
+            </select>
+          </Field>
+
+          <div className="flex items-center gap-4 mt-6">
+            <button className="gradient-btn" onClick={handleSave}>Save</button>
+            {saved && <span className="text-xs text-green-300">Saved ✓</span>}
+          </div>
+        </>
       )}
 
-      {/* How-it-works banner */}
-      <div className="mb-6 p-4 rounded-xl border border-accent/40 bg-accent/10">
-        <div className="text-sm font-medium mb-1">How FlowWrite works</div>
-        <p className="text-xs text-white/70 leading-relaxed">
-          FlowWrite runs silently in your menu bar. Whenever you want AI help in
-          any app, click into a text field and press{' '}
-          <kbd className="kbd">{hotkeyHuman}</kbd>.
-          The popup detects which app you're in, lets you pick a tone/length,
-          then pastes the generated text into the focused field.
-        </p>
-      </div>
+      {tab === 'templates' && (
+        <>
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <h2 className="text-sm font-semibold text-white/80">Templates</h2>
+              <p className="text-[11px] text-white/40 mt-0.5">
+                Reusable styles FlowWrite applies in the popup. Each has a purpose
+                (Email, Post, Message…) and an optional platform — filter below.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="gradient-btn text-[12px] px-4 py-2 shrink-0"
+              onClick={() => setEditing('new')}
+            >
+              + New template
+            </button>
+          </div>
 
-      <label className="flex items-start gap-3 mb-5 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-4 h-4 accent-accent"
-          checked={settings.launchAtLogin === true}
-          onChange={(e) => saveNow({ launchAtLogin: e.target.checked })}
-        />
-        <span>
-          <span className="block text-sm">
-            Start FlowWrite when I log in to my {navigator.platform.includes('Mac') ? 'Mac' : 'computer'}
-          </span>
-          <span className="block text-[11px] text-white/40">
-            Launches automatically in the background (menu bar / system tray) so
-            it's always ready when you press your hotkey.
-          </span>
-        </span>
-      </label>
+          {/* Purpose filter pills */}
+          {templates.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 mb-3">
+              <FilterPill active={filterPurpose === 'All'} onClick={() => { setFilterPurpose('All'); setFilterPlatform('All'); }}>
+                All
+              </FilterPill>
+              {purposesPresent.map((p) => (
+                <FilterPill
+                  key={p}
+                  active={filterPurpose === p}
+                  onClick={() => { setFilterPurpose(p); setFilterPlatform('All'); }}
+                >
+                  {p}
+                </FilterPill>
+              ))}
 
-      <Field label="Default tone">
-        <select
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
-          value={settings.defaultTone}
-          onChange={(e) => update({ defaultTone: e.target.value })}
-        >
-          {TONES.map((t) => (
-            <option key={t} value={t} className="bg-bg">{t}</option>
-          ))}
-        </select>
-      </Field>
+              {/* Platform sub-filter (only when relevant platforms exist) */}
+              {platformsPresent.length > 0 && (
+                <select
+                  className="ml-auto bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-[12px] focus:outline-none focus:border-accent"
+                  value={filterPlatform}
+                  onChange={(e) => setFilterPlatform(e.target.value)}
+                >
+                  <option value="All" className="bg-bg">All platforms</option>
+                  {platformsPresent.map((p) => (
+                    <option key={p} value={p} className="bg-bg">{p}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
-      <Field label="Default length">
-        <select
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
-          value={settings.defaultLength}
-          onChange={(e) => update({ defaultLength: e.target.value })}
-        >
-          {LENGTHS.map((l) => (
-            <option key={l} value={l} className="bg-bg">{l}</option>
-          ))}
-        </select>
-      </Field>
+          {templates.length === 0 ? (
+            <div className="rounded-xl bg-white/[0.04] border border-white/10 p-8 text-center">
+              <p className="text-white/50 text-sm">No templates yet.</p>
+              <p className="text-white/30 text-xs mt-1">
+                Add one and pick its purpose — e.g. an Email template “norm”, or a
+                Facebook Post style.
+              </p>
+            </div>
+          ) : filteredTemplates.length === 0 ? (
+            <div className="rounded-xl bg-white/[0.04] border border-white/10 p-8 text-center">
+              <p className="text-white/50 text-sm">No templates match this filter.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2.5">
+              {filteredTemplates.map((t) => (
+                <TemplateCard
+                  key={t.id}
+                  template={t}
+                  onEdit={() => setEditing(t)}
+                  onDelete={() => handleDeleteTemplate(t)}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
 
-      {/* ─── Audio transcriber ───────────────────────────────────────── */}
-      <div className="mt-8 mb-4 pt-5 border-t border-white/10">
-        <h2 className="text-sm font-semibold text-white/80">Audio transcriber</h2>
-        <p className="text-[11px] text-white/40 mt-0.5">
-          Voice-to-text for the popup 🎤 button and hold-Fn dictation.
-        </p>
-      </div>
-
-      <label className="flex items-start gap-3 mb-4 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-4 h-4 accent-accent"
-          checked={settings.transcriberEnabled !== false}
-          onChange={(e) => update({ transcriberEnabled: e.target.checked })}
-        />
-        <span>
-          <span className="block text-sm">Enable voice transcription</span>
-          <span className="block text-[11px] text-white/40">
-            Master switch for the popup microphone and hold-Fn voice typing.
-            Restart FlowWrite after changing.
-          </span>
-        </span>
-      </label>
-
-      <div className="mb-4 p-3 rounded-xl border border-white/10 bg-white/[0.03] flex items-center justify-between">
-        <span className="text-[11px] uppercase tracking-wider text-white/40">
-          Words transcribed
-        </span>
-        <span className="text-lg font-semibold text-accentSoft tabular-nums">
-          {(stats?.words ?? 0).toLocaleString()}
-        </span>
-      </div>
-
-      <Field label="Microphone input">
-        <select
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
-          value={settings.micDeviceId || ''}
-          onChange={(e) => saveNow({ micDeviceId: e.target.value })}
-        >
-          <option value="" className="bg-bg">Built-in / system default</option>
-          {devices.map((d, i) => (
-            <option key={d.deviceId} value={d.deviceId} className="bg-bg">
-              {d.label || `Microphone ${i + 1}`}
-            </option>
-          ))}
-        </select>
-        <p className="text-[11px] text-white/40 mt-1">
-          Pick a connected mic (e.g. Bluetooth headset). If it disconnects,
-          FlowWrite automatically switches back to the built-in mic.
-        </p>
-      </Field>
-
-      <label className="flex items-start gap-3 mb-4 cursor-pointer select-none">
-        <input
-          type="checkbox"
-          className="mt-0.5 w-4 h-4 accent-accent"
-          checked={settings.polishDictation !== false}
-          onChange={(e) => update({ polishDictation: e.target.checked })}
-        />
-        <span>
-          <span className="block text-sm">Clean up dictation grammar</span>
-          <span className="block text-[11px] text-white/40">
-            After transcribing your voice, fix punctuation/grammar and remove
-            filler words ("um", "uh"). Turn off for word-for-word transcripts.
-          </span>
-        </span>
-      </label>
-
-      <Field label="Dictation shortcut">
-        <DictationShortcut
-          value={settings.dictationHotkey || ''}
-          onChange={(v) => saveNow({ dictationHotkey: v })}
-        />
-      </Field>
-
-      <Field label="Manual hotkey">
-        <input
-          type="text"
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
-          value={settings.hotkey || ''}
-          onChange={(e) => update({ hotkey: e.target.value })}
-          placeholder="CommandOrControl+Shift+W"
-        />
-        <p className="text-[11px] text-white/40 mt-1">
-          Restart FlowWrite for hotkey changes to take effect.
-        </p>
-      </Field>
-
-      <Field label="Your niche">
-        <select
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"
-          value={settings.niche}
-          onChange={(e) => update({ niche: e.target.value })}
-        >
-          {NICHES.map((n) => (
-            <option key={n} value={n} className="bg-bg">{n}</option>
-          ))}
-        </select>
-      </Field>
-
-      <div className="flex items-center gap-4 mt-6">
-        <button className="gradient-btn" onClick={handleSave}>Save</button>
-        {saved && <span className="text-xs text-green-300">Saved ✓</span>}
-      </div>
+      <TemplateModal
+        open={editing !== null}
+        initial={editing === 'new' ? null : editing}
+        onClose={() => setEditing(null)}
+        onSave={saveTemplate}
+      />
     </div>
+  );
+}
+
+function TemplateCard({ template, onEdit, onDelete }) {
+  const isEmail = template.purpose === 'Email';
+  const preview = isEmail
+    ? (template.signature || template.content || '')
+    : (template.content || '');
+  const previewLabel = isEmail ? 'Signature' : null;
+
+  return (
+    <div className="rounded-xl p-3.5 bg-white/[0.04] border border-white/10 hover:border-accent/40 transition group flex flex-col">
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-sm font-medium truncate">{template.name}</span>
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-accent/15 border border-accent/30 text-accentSoft shrink-0">
+              {template.purpose}
+            </span>
+            {template.platform && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/10 border border-white/15 text-white/60 shrink-0">
+                {template.platform}
+              </span>
+            )}
+          </div>
+          {isEmail && template.fromName && (
+            <p className="text-[11px] text-white/35 mt-0.5 truncate">from {template.fromName}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition">
+          <button type="button" className="pill text-[10px] py-0.5 px-2" onClick={onEdit}>Edit</button>
+          <button
+            type="button"
+            className="pill text-[10px] py-0.5 px-2 text-red-300/80 border-red-400/30"
+            onClick={onDelete}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+      {previewLabel && (
+        <span className="text-[9px] uppercase tracking-wider text-white/30 mt-1">{previewLabel}</span>
+      )}
+      <pre className="font-sans text-[11px] text-white/65 whitespace-pre-wrap leading-snug line-clamp-4 mt-0.5 flex-1">
+        {preview || '(empty)'}
+      </pre>
+    </div>
+  );
+}
+
+function FilterPill({ active, onClick, children }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'px-3 py-1 rounded-full text-[12px] border transition ' +
+        (active
+          ? 'bg-accent/20 border-accent/50 text-white'
+          : 'bg-white/[0.04] border-white/10 text-white/55 hover:text-white')
+      }
+    >
+      {children}
+    </button>
   );
 }
 

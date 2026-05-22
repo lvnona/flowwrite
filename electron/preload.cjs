@@ -27,6 +27,16 @@ contextBridge.exposeInMainWorld('flowwrite', {
   saveUserTemplate: (t) => ipcRenderer.invoke('save-user-template', t),
   deleteUserTemplate: (id) => ipcRenderer.invoke('delete-user-template', id),
 
+  // Email templates (sender + style example + fixed signature)
+  getEmailTemplates: () => ipcRenderer.invoke('get-email-templates'),
+  saveEmailTemplate: (t) => ipcRenderer.invoke('save-email-template', t),
+  deleteEmailTemplate: (id) => ipcRenderer.invoke('delete-email-template', id),
+
+  // Unified templates (purpose + platform + style/email fields)
+  getTemplates: () => ipcRenderer.invoke('get-templates'),
+  saveTemplate: (t) => ipcRenderer.invoke('save-template', t),
+  deleteTemplate: (id) => ipcRenderer.invoke('delete-template', id),
+
   // Navigation — open the main window on a specific route from any renderer
   // (e.g., the popup can open the Dashboard to prompt the user to sign in).
   openMain: (route) => ipcRenderer.invoke('open-main', route),

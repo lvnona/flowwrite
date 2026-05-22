@@ -39,7 +39,8 @@ import ContextInput from './ContextInput.jsx';
 import GenerateButton from './GenerateButton.jsx';
 import { useClaudeAPI } from '../hooks/useClaudeAPI.js';
 import { useHistory } from '../hooks/useHistory.js';
-import { useUserTemplates, findUserTemplateForApp } from '../hooks/useUserTemplates.js';
+import { useTemplates } from '../hooks/useTemplates.js';
+import { autoPickTemplate } from '../utils/templateKinds.js';
 import { buildPrompt, LANGUAGES } from '../utils/promptBuilder.js';
 import { detectStyleFor, findTemplate } from '../utils/templates.js';
 
@@ -118,9 +119,11 @@ export default function Popup() {
   // The user-defined example template currently selected for few-shot
   // generation. Auto-picked from saved templates based on the active app,
   // overrideable via the in-popup picker.
-  const [activeUserTemplate, setActiveUserTemplate] = useState(null);
+  // The unified template selected for this generation (matches the current
+  // Content type). null = none. Auto-picked by platform, overrideable in-popup.
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
 
-  const { templates: userTemplates, refresh: refreshTemplates } = useUserTemplates();
+  const { templates, refresh: refreshTemplates } = useTemplates();
 
   const { generate, cancel, streaming, error } = useClaudeAPI();
   const { addEntry } = useHistory();
@@ -136,7 +139,7 @@ export default function Popup() {
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
-      // Always reload templates so new ones created in Dashboard appear immediately.
+      // Always reload templates so new ones created in Settings appear immediately.
       refreshTemplates();
       const safeCtx = ctx || MOCK_CONTEXT;
       setFieldContext(safeCtx);
@@ -147,6 +150,7 @@ export default function Popup() {
       setCopied(false);
       setMode('compose');
       setVisible(true);
+      setSelectedTemplate(null);
 
       // If main passed a template ID, apply it. Otherwise just infer the
       // content type from the field type as before.
@@ -166,12 +170,12 @@ export default function Popup() {
     return () => off?.();
   }, []);
 
-  // Auto-pick a user-defined example template based on the detected app
-  // whenever either the context or the user's template library changes.
+  // Auto-pick a template that matches the current Content type + detected app
+  // (e.g. on Gmail with Content=Email, grab the matching email template).
+  // Re-runs when the content type changes so switching type re-selects sensibly.
   useEffect(() => {
-    const match = findUserTemplateForApp(userTemplates, fieldContext?.activeApp);
-    setActiveUserTemplate(match);
-  }, [userTemplates, fieldContext?.activeApp]);
+    setSelectedTemplate(autoPickTemplate(templates, contentType, fieldContext?.activeApp));
+  }, [templates, contentType, fieldContext?.activeApp]);
 
   // Hydrate default tone / length from stored settings once on mount.
   useEffect(() => {
@@ -223,8 +227,12 @@ export default function Popup() {
     // event, so we fall back to `extra` for anything that isn't a string.
     const input = typeof overrideInput === 'string' ? overrideInput : extra;
     const isTranslate = contentType === 'Translate';
-    // Priority: translate > user's saved example > built-in style > generic.
-    const style = (isTranslate || activeUserTemplate)
+    // Only apply the selected template if it's for the current Content type.
+    const tpl = selectedTemplate && selectedTemplate.purpose === contentType ? selectedTemplate : null;
+    const emailTpl = tpl && tpl.purpose === 'Email' ? tpl : null;
+    const exampleTpl = tpl && !emailTpl ? tpl : null; // few-shot example path
+    // Priority: translate > template (email or example) > built-in style > generic.
+    const style = (isTranslate || tpl)
       ? null
       : detectStyleFor(fieldContext?.activeApp, contentType);
     const prompt = buildPrompt(
@@ -234,8 +242,9 @@ export default function Popup() {
       length,
       input,
       style,
-      isTranslate ? null : activeUserTemplate,
+      isTranslate ? null : exampleTpl,
       translateTo,
+      emailTpl,
     );
     setGenerated('');
     generatedRef.current = '';
@@ -249,11 +258,17 @@ export default function Popup() {
     });
 
     if (full) {
+      // Append the email template's signature verbatim — the model was told not
+      // to write its own sign-off, so this guarantees a consistent signature.
+      let finalText = full;
+      if (emailTpl && emailTpl.signature?.trim()) {
+        finalText = `${full.trimEnd()}\n\n${emailTpl.signature.trim()}`;
+      }
       // Defensive: ensure final text is rendered even if streaming chunks
       // landed after our listener was torn down (IPC race).
-      setGenerated(full);
-      generatedRef.current = full;
-      addEntry({ app: fieldContext.activeApp, contentType, tone, length, text: full });
+      setGenerated(finalText);
+      generatedRef.current = finalText;
+      addEntry({ app: fieldContext.activeApp, contentType, tone, length, text: finalText });
     }
   }
 
@@ -329,9 +344,9 @@ export default function Popup() {
                   onGenerate: handleGenerate,
                   onDictated: handleDictated,
                   error,
-                  userTemplates,
-                  activeUserTemplate,
-                  onUserTemplateChange: setActiveUserTemplate,
+                  templatesForType: templates.filter((t) => t.purpose === contentType),
+                  selectedTemplate,
+                  onTemplateChange: setSelectedTemplate,
                 }}
               />
             ) : (
@@ -412,9 +427,9 @@ function ComposeView({
   onGenerate,
   onDictated,
   error,
-  userTemplates,
-  activeUserTemplate,
-  onUserTemplateChange,
+  templatesForType,
+  selectedTemplate,
+  onTemplateChange,
 }) {
   const isTranslate = contentType === 'Translate';
   // Compact dropdown layout: one row per control, label on the left, select
@@ -433,31 +448,34 @@ function ComposeView({
         initial="hidden"
         animate="visible"
       >
-        {!isTranslate && userTemplates && userTemplates.length > 0 && (
-          <DropRow
-            label="Template"
-            value={activeUserTemplate?.id ?? ''}
-            onChange={(id) =>
-              onUserTemplateChange(
-                id ? userTemplates.find((t) => t.id === id) ?? null : null,
-              )
-            }
-            options={[
-              { value: '', label: '— None —' },
-              ...userTemplates.map((t) => ({
-                value: t.id,
-                label: t.platform ? `${t.name} · ${t.platform}` : t.name,
-              })),
-            ]}
-          />
-        )}
-
         <DropRow
           label="Content"
           value={contentType}
           onChange={setContentType}
           options={CONTENT_TYPES.map((v) => ({ value: v, label: v }))}
         />
+
+        {!isTranslate && templatesForType && templatesForType.length > 0 && (
+          <DropRow
+            label="Template"
+            value={selectedTemplate?.id ?? ''}
+            onChange={(id) =>
+              onTemplateChange(
+                id ? templatesForType.find((t) => t.id === id) ?? null : null,
+              )
+            }
+            options={[
+              { value: '', label: '— None —' },
+              ...templatesForType.map((t) => ({
+                value: t.id,
+                label:
+                  t.purpose === 'Email'
+                    ? (t.fromName ? `${t.name} · ${t.fromName}` : t.name)
+                    : (t.platform ? `${t.name} · ${t.platform}` : t.name),
+              })),
+            ]}
+          />
+        )}
 
         {isTranslate ? (
           <DropRow
