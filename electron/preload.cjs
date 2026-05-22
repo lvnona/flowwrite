@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('flowwrite', {
   saveTemplate: (t) => ipcRenderer.invoke('save-template', t),
   deleteTemplate: (id) => ipcRenderer.invoke('delete-template', id),
 
+  // macOS permissions (Permissions tab in Settings)
+  getPermissions: () => ipcRenderer.invoke('get-permissions'),
+  requestMicrophone: () => ipcRenderer.invoke('request-microphone'),
+  openPermissionSettings: (which) => ipcRenderer.invoke('open-permission-settings', which),
+
   // Navigation — open the main window on a specific route from any renderer
   // (e.g., the popup can open the Dashboard to prompt the user to sign in).
   openMain: (route) => ipcRenderer.invoke('open-main', route),

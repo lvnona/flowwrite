@@ -10,7 +10,7 @@
 // still imported so they remain available if someone wants to re-enable
 // hover triggering later, but we never call them.)
 
-import { app, BrowserWindow, ipcMain, globalShortcut, screen, session, systemPreferences } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, screen, session, systemPreferences, shell } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
@@ -652,6 +652,51 @@ ipcMain.handle('delete-template', (_e, id) => {
   const updated = list.filter((t) => t.id !== id);
   store.set('templates', updated);
   return updated;
+});
+
+// ── macOS permissions (Settings → Permissions tab) ───────────────────────────
+// FlowWrite needs Microphone (voice dictation) and Accessibility (to paste
+// generated/dictated text into other apps via synthetic keystrokes).
+
+/** Snapshot of the permissions the app needs. */
+ipcMain.handle('get-permissions', () => {
+  if (process.platform !== 'darwin') {
+    // Windows/Linux don't gate these the same way.
+    return { platform: process.platform, microphone: 'granted', accessibility: true };
+  }
+  return {
+    platform: 'darwin',
+    // 'granted' | 'denied' | 'restricted' | 'not-determined'
+    microphone: systemPreferences.getMediaAccessStatus('microphone'),
+    accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+  };
+});
+
+/** Ask the OS for microphone access (shows the system prompt if undetermined). */
+ipcMain.handle('request-microphone', async () => {
+  if (process.platform !== 'darwin') return true;
+  try {
+    return await systemPreferences.askForMediaAccess('microphone');
+  } catch {
+    return false;
+  }
+});
+
+/**
+ * Open the relevant System Settings pane (and, for accessibility, also trigger
+ * the OS prompt so FlowWrite appears in the list ready to toggle on).
+ * which: 'microphone' | 'accessibility'
+ */
+ipcMain.handle('open-permission-settings', (_e, which) => {
+  if (process.platform !== 'darwin') return { ok: false };
+  if (which === 'accessibility') {
+    // Triggers the prompt + adds FlowWrite to the Accessibility list.
+    systemPreferences.isTrustedAccessibilityClient(true);
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
+  } else {
+    shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+  }
+  return { ok: true };
 });
 
 /**

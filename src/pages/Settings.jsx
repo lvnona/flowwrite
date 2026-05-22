@@ -4,7 +4,7 @@
 //                 filters. Each template carries a purpose (Email / Post / …)
 //                 and an optional platform, so they're easy to organise.
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { TONES } from '../components/TonePicker.jsx';
 import { LENGTHS } from '../components/LengthPicker.jsx';
 import NavBar from '../components/NavBar.jsx';
@@ -26,11 +26,34 @@ export default function Settings() {
   const [editing, setEditing] = useState(null);          // null | 'new' | template
   const [filterPurpose, setFilterPurpose] = useState('All');
   const [filterPlatform, setFilterPlatform] = useState('All');
+  const [perms, setPerms] = useState(null);
 
   async function handleDeleteTemplate(t) {
     if (!confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
     await removeTemplate(t.id);
   }
+
+  const refreshPerms = useCallback(async () => {
+    const p = await window.flowwrite?.getPermissions?.();
+    if (p) setPerms(p);
+  }, []);
+
+  // Load permission status; while the Permissions tab is open, keep it fresh
+  // (poll + re-check on window focus) so it updates after you grant in System
+  // Settings and switch back.
+  useEffect(() => {
+    refreshPerms();
+    if (tab !== 'permissions') return undefined;
+    const id = setInterval(refreshPerms, 2000);
+    const onFocus = () => refreshPerms();
+    window.addEventListener('focus', onFocus);
+    return () => { clearInterval(id); window.removeEventListener('focus', onFocus); };
+  }, [tab, refreshPerms]);
+
+  // True when nothing needs the user's attention (used for the tab warning dot).
+  const permsOk = !perms
+    || perms.platform !== 'darwin'
+    || (perms.microphone === 'granted' && perms.accessibility === true);
 
   useEffect(() => {
     window.flowwrite?.getSettings?.().then(setSettings);
@@ -122,7 +145,7 @@ export default function Settings() {
 
       {/* Tab bar */}
       <div className="flex gap-1 mb-6 p-1 rounded-xl bg-white/[0.04] border border-white/10 w-fit">
-        {[['general', 'General'], ['templates', 'Templates']].map(([id, label]) => (
+        {[['general', 'General'], ['templates', 'Templates'], ['permissions', 'Permissions']].map(([id, label]) => (
           <button
             key={id}
             type="button"
@@ -135,6 +158,9 @@ export default function Settings() {
             {label}
             {id === 'templates' && templates.length > 0 && (
               <span className="ml-1.5 text-[11px] opacity-70">{templates.length}</span>
+            )}
+            {id === 'permissions' && !permsOk && (
+              <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-red-400 align-middle" title="Action needed" />
             )}
           </button>
         ))}
@@ -392,6 +418,57 @@ export default function Settings() {
         </>
       )}
 
+      {tab === 'permissions' && (
+        <>
+          <div className="mb-4">
+            <h2 className="text-sm font-semibold text-white/80">Permissions</h2>
+            <p className="text-[11px] text-white/40 mt-0.5">
+              FlowWrite needs these to work. This list re-checks itself automatically.
+            </p>
+          </div>
+
+          {perms && perms.platform !== 'darwin' ? (
+            <div className="rounded-xl bg-white/[0.04] border border-white/10 p-6 text-sm text-white/60">
+              No extra permissions are required on this platform.
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <PermRow
+                title="Microphone"
+                why="Needed for voice dictation (the Fn / 🎤 button)."
+                ok={perms?.microphone === 'granted'}
+                statusText={micStatusText(perms?.microphone)}
+                actionLabel={perms?.microphone === 'not-determined' ? 'Request access' : 'Open Settings'}
+                onAction={
+                  perms?.microphone === 'not-determined'
+                    ? async () => { await window.flowwrite?.requestMicrophone?.(); refreshPerms(); }
+                    : () => window.flowwrite?.openPermissionSettings?.('microphone')
+                }
+              />
+              <PermRow
+                title="Accessibility"
+                why="Lets FlowWrite paste generated & dictated text into other apps automatically. Without it, you have to press ⌘V yourself."
+                ok={perms?.accessibility === true}
+                statusText={perms?.accessibility ? 'Granted' : 'Not granted'}
+                actionLabel="Open Settings"
+                onAction={() => window.flowwrite?.openPermissionSettings?.('accessibility')}
+              />
+
+              <div className="flex items-center gap-3 mt-1">
+                <button type="button" className="pill text-[12px]" onClick={refreshPerms}>Re-check now</button>
+                {permsOk && <span className="text-xs text-green-300">All set ✓</span>}
+              </div>
+              <p className="text-[11px] text-white/40 mt-1 leading-relaxed">
+                After switching a permission ON in System Settings, quit and reopen
+                FlowWrite so it fully takes effect. If macOS keeps re-asking for the
+                microphone, toggle FlowWrite OFF then ON in
+                Privacy &amp; Security → Microphone.
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
       <TemplateModal
         open={editing !== null}
         initial={editing === 'new' ? null : editing}
@@ -463,6 +540,39 @@ function FilterPill({ active, onClick, children }) {
     >
       {children}
     </button>
+  );
+}
+
+function micStatusText(status) {
+  switch (status) {
+    case 'granted': return 'Granted';
+    case 'denied': return 'Denied';
+    case 'restricted': return 'Restricted';
+    case 'not-determined': return 'Not requested yet';
+    default: return 'Unknown';
+  }
+}
+
+function PermRow({ title, why, ok, statusText, actionLabel, onAction }) {
+  return (
+    <div className="rounded-xl p-4 bg-white/[0.04] border border-white/10 flex items-start gap-3">
+      <span
+        className={'mt-1 w-2.5 h-2.5 rounded-full shrink-0 ' + (ok ? 'bg-green-400' : 'bg-red-400')}
+        title={ok ? 'Granted' : 'Needs attention'}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium">{title}</span>
+          <span className={'text-[11px] ' + (ok ? 'text-green-300' : 'text-red-300')}>{statusText}</span>
+        </div>
+        <p className="text-[11px] text-white/45 mt-0.5 leading-relaxed">{why}</p>
+      </div>
+      {!ok && (
+        <button type="button" className="pill text-[12px] shrink-0" onClick={onAction}>
+          {actionLabel}
+        </button>
+      )}
+    </div>
   );
 }
 

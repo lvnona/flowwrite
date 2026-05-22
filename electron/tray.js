@@ -18,11 +18,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  * @param {() => void} opts.onQuit
  */
 export function createTray(opts) {
-  const iconPath = join(__dirname, '..', 'public', 'icons', 'tray-icon.png');
+  // macOS menu bar wants a monochrome *template* icon (it inverts it for
+  // light/dark). Windows/Linux show the white version as-is. Both have @2x
+  // variants alongside, which nativeImage picks up automatically on retina.
+  const isMac = process.platform === 'darwin';
+  const iconFile = isMac ? 'tray-iconTemplate.png' : 'tray-icon.png';
+  const iconPath = join(__dirname, '..', 'public', 'icons', iconFile);
   let image = nativeImage.createFromPath(iconPath);
   if (image.isEmpty()) {
     // Fallback so the tray still appears if the asset is missing in dev.
     image = nativeImage.createEmpty();
+  } else if (isMac) {
+    image.setTemplateImage(true); // adapts to the menu bar's light/dark theme
   }
 
   const tray = new Tray(image);
