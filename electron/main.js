@@ -417,6 +417,24 @@ ipcMain.handle('open-main', (_e, route) => {
   return { ok: true };
 });
 
+/**
+ * Cross-window auth sync.
+ * Firebase's onAuthStateChanged does not fire across separate Electron renderer
+ * processes. When any window detects a sign-in or sign-out, it calls this
+ * handler. We forward the event to all other open windows so they can reload
+ * and pick up the fresh auth state from IndexedDB.
+ */
+ipcMain.handle('notify-auth-change', (_e, isSignedIn) => {
+  const sender = _e.sender;
+  // Broadcast to every window except the one that sent the notification.
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.webContents.id !== sender.id) {
+      win.webContents.send('auth:changed', isSignedIn);
+    }
+  }
+  return { ok: true };
+});
+
 ipcMain.handle('get-settings', () => store.get('settings'));
 
 ipcMain.handle('save-settings', (_e, next) => {

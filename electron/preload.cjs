@@ -31,6 +31,16 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // (e.g., the popup can open the Dashboard to prompt the user to sign in).
   openMain: (route) => ipcRenderer.invoke('open-main', route),
 
+  // Cross-window auth sync.
+  // Any window can notify the main process that auth state changed; the main
+  // process forwards it to all other windows so they can reload/update.
+  notifyAuthChange: (isSignedIn) => ipcRenderer.invoke('notify-auth-change', isSignedIn),
+  onAuthChange: (cb) => {
+    const listener = (_e, isSignedIn) => cb(isSignedIn);
+    ipcRenderer.on('auth:changed', listener);
+    return () => ipcRenderer.removeListener('auth:changed', listener);
+  },
+
   // Auth — only Google OAuth is supported. Renderer calls signIn() with the
   // OAuth client ID from firebaseConfig.js; we return the Google id_token
   // which the renderer hands to Firebase via signInWithCredential.

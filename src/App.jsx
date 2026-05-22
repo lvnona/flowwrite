@@ -36,7 +36,16 @@ function PopupLoading() {
 
 // Shown in the popup window when no user is signed in.
 // Guides the user to open the main window and log in.
+// When the user signs in on the main window the main process broadcasts
+// auth:changed → we reload this renderer so Firebase picks up the fresh session.
 function PopupSignIn() {
+  useEffect(() => {
+    const unsub = window.flowwrite?.onAuthChange?.((isSignedIn) => {
+      if (isSignedIn) window.location.reload();
+    });
+    return () => unsub?.();
+  }, []);
+
   return (
     <div className="fixed inset-0 flex flex-col items-center justify-center gap-4 bg-[#16121f]/95 rounded-xl border border-white/10 shadow-2xl">
       <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center text-xl">✦</div>

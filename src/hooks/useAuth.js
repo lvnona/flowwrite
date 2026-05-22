@@ -44,6 +44,10 @@ export function useAuth() {
       off = onUser((u) => {
         setUser(u || null);
         setLoading(false);
+        // Tell the main process auth changed so it can notify other windows
+        // (e.g. the popup, which runs in a separate renderer process and won't
+        // receive Firebase's onAuthStateChanged cross-process on its own).
+        window.flowwrite?.notifyAuthChange?.(!!u);
       });
     } catch (err) {
       setError(err.message);
