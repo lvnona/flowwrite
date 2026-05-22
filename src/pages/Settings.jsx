@@ -130,6 +130,24 @@ export default function Settings() {
         </p>
       </div>
 
+      <label className="flex items-start gap-3 mb-5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          className="mt-0.5 w-4 h-4 accent-accent"
+          checked={settings.launchAtLogin === true}
+          onChange={(e) => saveNow({ launchAtLogin: e.target.checked })}
+        />
+        <span>
+          <span className="block text-sm">
+            Start FlowWrite when I log in to my {navigator.platform.includes('Mac') ? 'Mac' : 'computer'}
+          </span>
+          <span className="block text-[11px] text-white/40">
+            Launches automatically in the background (menu bar / system tray) so
+            it's always ready when you press your hotkey.
+          </span>
+        </span>
+      </label>
+
       <Field label="Default tone">
         <select
           className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm focus:outline-none focus:border-accent"

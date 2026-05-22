@@ -241,11 +241,14 @@ async function readWindows() {
     $pid = 0
     [Win]::GetWindowThreadProcessId($h, [ref]$pid) | Out-Null
     $p = Get-Process -Id $pid
-    "$($p.ProcessName)||$($sb.ToString())"
+    "$($p.ProcessName)||$($sb.ToString())||$($h.ToInt64())"
   `;
   const { stdout } = await pexec(`powershell -NoProfile -Command "${ps.replace(/"/g, '\\"')}"`);
-  const [app, title] = stdout.trim().split('||');
-  return { activeApp: app || 'Unknown', windowTitle: title || '', url: '' };
+  // The third field is the foreground window handle (HWND). We keep it so the
+  // auto-fill step can restore focus to *this* window before pasting — after the
+  // popup hides, Windows won't reliably hand focus back on its own.
+  const [app, title, hwnd] = stdout.trim().split('||');
+  return { activeApp: app || 'Unknown', windowTitle: title || '', url: '', hwnd: hwnd || '' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -330,5 +333,8 @@ export async function readContext(mousePosition) {
     windowTitle: info.windowTitle,
     fieldType,
     cursor: mousePosition,
+    // Foreground window handle (Windows only) — used by autoFill to restore
+    // focus to the right window before pasting. null/undefined elsewhere.
+    hwnd: info.hwnd || null,
   };
 }

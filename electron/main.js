@@ -52,6 +52,9 @@ const store = new Store({
       // Ctrl+Shift+Space toggle on Windows); 'Fn' = hold Fn (macOS); any
       // accelerator like 'Control+Shift+Space' = global toggle; 'Off' = none.
       dictationHotkey: '',
+      // Launch FlowWrite automatically when you log into your computer.
+      // Applied via app.setLoginItemSettings (works on Windows + macOS).
+      launchAtLogin: false,
     },
     history: [],
     // User-defined example posts (few-shot style references). Each item:
@@ -297,6 +300,24 @@ function registerDictationTrigger() {
   }
 }
 
+/**
+ * Register (or remove) FlowWrite as a login item so it starts with the OS.
+ * `openAsHidden` starts it minimised to the tray rather than popping a window.
+ */
+function applyLaunchAtLogin(enabled) {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      openAsHidden: true,
+      // On Windows, start with the --hidden arg so the app boots straight to the
+      // tray (createMainWindow already keeps the window hidden by default).
+      args: ['--hidden'],
+    });
+  } catch (err) {
+    console.warn('[FlowWrite] Could not set launch-at-login:', err.message);
+  }
+}
+
 app.whenReady().then(() => {
   // ── Microphone access (voice dictation) ───────────────────────────────────
   // getUserMedia() in the renderer triggers a Chromium permission request; by
@@ -324,6 +345,9 @@ app.whenReady().then(() => {
   popupWindow = createPopupWindow();
   dictationWindow = createDictationWindow();
   registerDictationTrigger();
+  // Sync the OS login item with the saved preference (handles app reinstalls /
+  // settings changed while the app wasn't running).
+  applyLaunchAtLogin(store.get('settings').launchAtLogin);
 
   tray = createTray({
     onOpenDashboard: () => openMainWindowOn('dashboard'),
@@ -442,6 +466,10 @@ ipcMain.handle('save-settings', (_e, next) => {
   // Re-bind the dictation trigger live if the shortcut / enable changed.
   if ('dictationHotkey' in next || 'transcriberEnabled' in next) {
     registerDictationTrigger();
+  }
+  // Register/unregister the OS "launch at login" item live when toggled.
+  if ('launchAtLogin' in next) {
+    applyLaunchAtLogin(store.get('settings').launchAtLogin);
   }
   return store.get('settings');
 });

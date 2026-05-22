@@ -94,22 +94,59 @@ async function fillViaAppleScript(text, { selectAll = true } = {}) {
 // Tier 2 (Windows) — PowerShell SendKeys
 // ─────────────────────────────────────────────────────────
 
-async function fillViaWindows(text, { selectAll = true } = {}) {
+async function fillViaWindows(text, { selectAll = true, hwnd = null } = {}) {
   if (process.platform !== 'win32') throw new Error('SendKeys: Windows only');
 
   clipboard.writeText(text);
-  // Let focus settle back on the target field after our window hid.
-  await delay(120);
 
   // SendKeys: ^a = Ctrl+A (select all), ^v = Ctrl+V (paste). Insert mode pastes
   // at the cursor (no select-all). Strings are PS single-quoted so the carets
   // are literal; execFile (no shell) avoids cmd.exe caret-escaping issues.
-  const send = selectAll
+  const sendSeq = selectAll
     ? "[System.Windows.Forms.SendKeys]::SendWait('^a'); Start-Sleep -Milliseconds 40; [System.Windows.Forms.SendKeys]::SendWait('^v')"
     : "[System.Windows.Forms.SendKeys]::SendWait('^v')";
-  const script = `Add-Type -AssemblyName System.Windows.Forms; Start-Sleep -Milliseconds 60; ${send}`;
 
-  await pexecFile('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', script]);
+  // Restore focus to the window the user summoned the popup from. After we hide
+  // our popup, Windows doesn't reliably hand focus back, and a bare
+  // SetForegroundWindow gets rejected by the OS foreground lock — so we briefly
+  // attach our input thread to the current foreground thread, which lets the
+  // call through. Sanitised to digits so it can't inject into the script.
+  const numericHwnd = hwnd != null ? String(hwnd).replace(/[^0-9-]/g, '') : '';
+  const focusBlock = numericHwnd
+    ? [
+        'Add-Type @"',
+        'using System;',
+        'using System.Runtime.InteropServices;',
+        'public class Fg {',
+        '  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);',
+        '  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);',
+        '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);',
+        '  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool c);',
+        '  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();',
+        '}',
+        '"@',
+        `$target = [IntPtr]${numericHwnd}`,
+        '$fg = [Fg]::GetForegroundWindow()',
+        '$procId = [uint32]0',
+        '$fgThread = [Fg]::GetWindowThreadProcessId($fg, [ref]$procId)',
+        '$myThread = [Fg]::GetCurrentThreadId()',
+        '[Fg]::AttachThreadInput($fgThread, $myThread, $true) | Out-Null',
+        '[Fg]::ShowWindow($target, 9) | Out-Null',
+        '[Fg]::SetForegroundWindow($target) | Out-Null',
+        '[Fg]::AttachThreadInput($fgThread, $myThread, $false) | Out-Null',
+        'Start-Sleep -Milliseconds 90',
+      ].join('\n')
+    : 'Start-Sleep -Milliseconds 120'; // no handle — just wait for focus to settle
+
+  const script = ['Add-Type -AssemblyName System.Windows.Forms', focusBlock, sendSeq].join('\n');
+
+  // Pass the script as a Base64 (UTF-16LE) blob via -EncodedCommand. The script
+  // contains C# double-quotes (e.g. "user32.dll") and a here-string; routing
+  // those through normal command-line quoting on Windows mangles them, whereas
+  // an encoded command has no quoting concerns at all.
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  await pexecFile('powershell', ['-NoProfile', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded]);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -165,8 +202,9 @@ async function runFill(text, opts) {
  * Used by the content popup's "Insert".
  * @returns {Promise<{tier: string}>}  Which tier was used.
  */
-export async function autoFillText(text, _targetField) {
-  return runFill(text, { selectAll: true });
+export async function autoFillText(text, targetField) {
+  // targetField.hwnd (Windows) lets us re-focus the original window before paste.
+  return runFill(text, { selectAll: true, hwnd: targetField?.hwnd ?? null });
 }
 
 /**
