@@ -5,5 +5,12 @@ release/
 .DS_Store
 *.log
 
+# Secrets / certificates — never commit
+*.p12
+*.zip
+*adminsdk*.json
+*service-account*.json
+admin-web/public/_stripe-config.php
+
 # Compiled native Fn-key helper (built locally / in CI from fn-monitor.swift)
 electron/native/fn-monitor

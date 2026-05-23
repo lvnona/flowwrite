@@ -27,6 +27,7 @@ export default function Settings() {
   const [filterPurpose, setFilterPurpose] = useState('All');
   const [filterPlatform, setFilterPlatform] = useState('All');
   const [perms, setPerms] = useState(null);
+  const [recheck, setRecheck] = useState(''); // '' | 'checking' | 'done'
 
   async function handleDeleteTemplate(t) {
     if (!confirm(`Delete template "${t.name}"? This cannot be undone.`)) return;
@@ -37,6 +38,19 @@ export default function Settings() {
     const p = await window.flowwrite?.getPermissions?.();
     if (p) setPerms(p);
   }, []);
+
+  // Manual re-check with visible feedback (the auto-poll is silent).
+  const handleRecheck = useCallback(async () => {
+    setRecheck('checking');
+    const started = Date.now();
+    await refreshPerms();
+    // Keep "Checking…" on screen long enough to be perceptible.
+    const wait = Math.max(0, 450 - (Date.now() - started));
+    setTimeout(() => {
+      setRecheck('done');
+      setTimeout(() => setRecheck(''), 1600);
+    }, wait);
+  }, [refreshPerms]);
 
   // Load permission status; while the Permissions tab is open, keep it fresh
   // (poll + re-check on window focus) so it updates after you grant in System
@@ -216,6 +230,42 @@ export default function Settings() {
               </span>
             </span>
           </label>
+
+          {/* ─── Privacy: history ─────────────────────────────────────────── */}
+          <label className="flex items-start gap-3 mb-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="mt-0.5 w-4 h-4 accent-accent"
+              checked={settings.historyEnabled === true}
+              onChange={(e) => saveNow({ historyEnabled: e.target.checked })}
+            />
+            <span>
+              <span className="block text-sm">Save generation history</span>
+              <span className="block text-[11px] text-white/40">
+                Keeps your recent generations on the History page (stored only on
+                this device). <span className="text-white/55">Off by default for privacy</span> —
+                turn on only if you want a record. Handling sensitive info? Leave it off.
+              </span>
+            </span>
+          </label>
+
+          {settings.historyEnabled !== true && (
+            <p className="text-[11px] text-accentSoft/80 mb-5 ml-7">
+              History is off — nothing you generate is being stored.
+            </p>
+          )}
+          {settings.historyEnabled === true && (
+            <button
+              type="button"
+              className="pill text-[12px] mb-5 ml-7 text-red-300/80 border-red-400/30"
+              onClick={async () => {
+                if (!confirm('Delete all stored history now? This cannot be undone.')) return;
+                await window.flowwrite?.clearHistory?.();
+              }}
+            >
+              Clear history now
+            </button>
+          )}
 
           <Field label="Default tone">
             <select
@@ -455,8 +505,16 @@ export default function Settings() {
               />
 
               <div className="flex items-center gap-3 mt-1">
-                <button type="button" className="pill text-[12px]" onClick={refreshPerms}>Re-check now</button>
-                {permsOk && <span className="text-xs text-green-300">All set ✓</span>}
+                <button
+                  type="button"
+                  className="pill text-[12px]"
+                  onClick={handleRecheck}
+                  disabled={recheck === 'checking'}
+                >
+                  {recheck === 'checking' ? 'Checking…' : 'Re-check now'}
+                </button>
+                {recheck === 'done' && <span className="text-xs text-accentSoft">↻ Re-checked</span>}
+                {recheck !== 'done' && permsOk && <span className="text-xs text-green-300">All set ✓</span>}
               </div>
               <p className="text-[11px] text-white/40 mt-1 leading-relaxed">
                 After switching a permission ON in System Settings, quit and reopen

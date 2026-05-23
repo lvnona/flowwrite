@@ -72,7 +72,16 @@ function readRoute() {
 
 export default function App() {
   const [route, setRoute] = useState(readRoute);
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
+
+  // Push the signed-in user's plan into the main process so it can enforce the
+  // free-tier weekly limits (generations + dictation). Skip the dictation
+  // window (no auth context) so it never overwrites the real plan with 'free'.
+  useEffect(() => {
+    if (route === 'dictation') return;
+    if (!profile?.plan) return;
+    window.flowwrite?.setPlan?.(profile.plan);
+  }, [profile?.plan, route]);
 
   useEffect(() => {
     const handler = () => setRoute(readRoute());
@@ -104,6 +113,8 @@ export default function App() {
             anthropic:        d.anthropic        || '',
             openaiPopup:      d.openaiPopup      || '',
             openaiPopupModel: d.openaiPopupModel || 'gpt-4o',
+            deepseek:         d.deepseek         || '',
+            deepseekModel:    d.deepseekModel    || 'deepseek-v4-flash',
             openai:           d.openai           || '',
           });
         },

@@ -32,6 +32,8 @@ export function useAdmin(user) {
     anthropic:        '',
     openaiPopup:      '',
     openaiPopupModel: 'gpt-4o',
+    deepseek:         '',
+    deepseekModel:    'deepseek-v4-flash',
     openai:           '',
   });
   const [loading, setLoading] = useState(true);
@@ -179,6 +181,8 @@ export function useAdmin(user) {
           anthropic:        d.anthropic        || '',
           openaiPopup:      d.openaiPopup      || '',
           openaiPopupModel: d.openaiPopupModel || 'gpt-4o',
+          deepseek:         d.deepseek         || '',
+          deepseekModel:    d.deepseekModel    || 'deepseek-v4-flash',
           openai:           d.openai           || '',
         });
       }
@@ -193,6 +197,8 @@ export function useAdmin(user) {
       anthropic:        (keys.anthropic        || '').trim(),
       openaiPopup:      (keys.openaiPopup      || '').trim(),
       openaiPopupModel: (keys.openaiPopupModel || 'gpt-4o').trim(),
+      deepseek:         (keys.deepseek         || '').trim(),
+      deepseekModel:    (keys.deepseekModel    || 'deepseek-v4-flash').trim(),
       openai:           (keys.openai           || '').trim(),
     };
     await setDoc(API_KEYS_REF(), {

@@ -49,6 +49,8 @@ export function useDictation() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [error, setError] = useState(null);
+  // 'audio' once the free weekly dictation cap is hit, else null.
+  const [limitReached, setLimitReached] = useState(null);
 
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
@@ -118,6 +120,11 @@ export function useDictation() {
         mimeType: blob.type || mimeType,
       });
       if (!res?.ok) {
+        if (res?.limitReached) {
+          setLimitReached(res.limitReached);
+          setError('Free weekly dictation limit reached — upgrade to Pro for unlimited.');
+          return null;
+        }
         setError(res?.error || 'Transcription failed.');
         return null;
       }
@@ -145,5 +152,7 @@ export function useDictation() {
     releaseStream();
   }, [releaseStream]);
 
-  return { recording, transcribing, error, start, stop, cancel };
+  const clearLimit = useCallback(() => setLimitReached(null), []);
+
+  return { recording, transcribing, error, limitReached, clearLimit, start, stop, cancel };
 }

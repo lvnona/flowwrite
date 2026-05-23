@@ -8,6 +8,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useHistory } from '../hooks/useHistory.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { thisWeekKey } from '../utils/usageTracking.js';
+import { checkoutUrl, portalUrl } from '../utils/billing.js';
 import NavBar from '../components/NavBar.jsx';
 
 function startOfDay(t = Date.now()) {
@@ -32,19 +33,31 @@ function thisMonthKey() {
 
 export default function Dashboard() {
   const { entries } = useHistory();
-  const { profile } = useAuth();
+  const { user, profile } = useAuth();
 
   // Transcriber word counts come from the main process (electron-store), which
   // counts EVERY dictation source regardless of auth — see main.js.
   const [transcriber, setTranscriber] = useState({ words: 0, weekly: {}, monthly: {} });
   const [version, setVersion] = useState('');
+  // This week's usage vs the active plan's limits (from the main process).
+  const [usage, setUsage] = useState(null);
 
   useEffect(() => {
     window.flowwrite?.getTranscriberStats?.().then((s) => {
       if (s) setTranscriber({ words: 0, weekly: {}, monthly: {}, ...s });
     });
     window.flowwrite?.getAppVersion?.().then((v) => { if (v) setVersion(v); });
+    window.flowwrite?.getUsage?.().then((u) => { if (u) setUsage(u); });
   }, []);
+
+  const isPro = (profile?.plan === 'pro' || profile?.plan === 'team');
+
+  function openUpgrade() {
+    window.flowwrite?.openExternal?.(checkoutUrl(user?.uid, user?.email));
+  }
+  function openManage() {
+    window.flowwrite?.openExternal?.(portalUrl(user?.uid));
+  }
 
   // Cloud-side counters are the source of truth (server enforces them). The
   // local history list is a richer log of what was actually generated.
@@ -77,6 +90,45 @@ export default function Dashboard() {
   return (
     <div className="page-bg p-8 max-w-4xl mx-auto text-white">
       <NavBar active="dashboard" />
+
+      {/* ── Plan & limits ─────────────────────────────────────────────── */}
+      <div className={'rounded-xl p-5 mb-6 border ' + (isPro ? 'bg-accent/10 border-accent/40' : 'bg-white/[0.04] border-white/10')}>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Your plan</span>
+              <span className={'text-[11px] uppercase tracking-wider px-2 py-0.5 rounded-full ' + (isPro ? 'bg-accent text-white' : 'bg-white/10 text-white/70')}>
+                {isPro ? (profile?.plan === 'team' ? 'Team' : 'Pro') : 'Free'}
+              </span>
+            </div>
+            <p className="text-[12px] text-white/45 mt-1">
+              {isPro
+                ? 'Unlimited generations & voice dictation.'
+                : 'Free weekly limits — they reset every Monday.'}
+            </p>
+          </div>
+          {isPro ? (
+            <button type="button" className="pill text-[12px]" onClick={openManage}>Manage subscription</button>
+          ) : (
+            <button type="button" className="gradient-btn text-[12px] px-4 py-2" onClick={openUpgrade}>Upgrade to Pro</button>
+          )}
+        </div>
+
+        {!isPro && usage && (
+          <div className="grid grid-cols-2 gap-4 mt-4">
+            <UsageBar
+              label="AI generations"
+              used={usage.generations?.used || 0}
+              limit={usage.generations?.limit ?? 50}
+            />
+            <UsageBar
+              label="Dictated words"
+              used={usage.audioWords?.used || 0}
+              limit={usage.audioWords?.limit ?? 2500}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Popup requests — cloud-side counters are authoritative */}
       <h3 className="text-[11px] uppercase tracking-wider text-white/40 mb-2">
@@ -148,6 +200,28 @@ export default function Dashboard() {
         <span>·</span>
         <span>Developed by U11</span>
       </footer>
+    </div>
+  );
+}
+
+function UsageBar({ label, used, limit }) {
+  const lim = limit || 0;
+  const pct = lim > 0 ? Math.min(100, Math.round((used / lim) * 100)) : 0;
+  const over = lim > 0 && used >= lim;
+  return (
+    <div>
+      <div className="flex items-center justify-between text-[12px] mb-1.5">
+        <span className="text-white/70">{label}</span>
+        <span className={'tabular-nums ' + (over ? 'text-red-300' : 'text-white/50')}>
+          {used.toLocaleString()} / {lim.toLocaleString()}
+        </span>
+      </div>
+      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className={'h-full rounded-full ' + (over ? 'bg-red-400' : 'bg-accent')}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }

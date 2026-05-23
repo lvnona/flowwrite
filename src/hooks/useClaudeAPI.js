@@ -26,6 +26,8 @@ export function useClaudeAPI() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState(null);
   const [usage, setUsage] = useState(null);
+  // null while under the cap; 'generations' once the free weekly limit is hit.
+  const [limitReached, setLimitReached] = useState(null);
   const abortRef = useRef(null);
 
   const cancel = useCallback(() => {
@@ -33,11 +35,14 @@ export function useClaudeAPI() {
     setStreaming(false);
   }, []);
 
+  const clearLimit = useCallback(() => setLimitReached(null), []);
+
   const generate = useCallback(async (prompt, onChunk) => {
     const controller = new AbortController();
     abortRef.current = controller;
     setStreaming(true);
     setError(null);
+    setLimitReached(null);
 
     try {
       const text = await claudeGenerate(prompt, onChunk, controller.signal);
@@ -56,6 +61,8 @@ export function useClaudeAPI() {
       return text;
     } catch (err) {
       if (controller.signal.aborted) return null;
+      // Free-tier limit → signal the UI to show an upgrade prompt (no red error).
+      if (err?.limitReached) { setLimitReached(err.limitReached); return null; }
       const msg = err?.message || String(err);
       setError(msg);
       return null;
@@ -64,5 +71,5 @@ export function useClaudeAPI() {
     }
   }, []);
 
-  return { generate, cancel, streaming, error, usage };
+  return { generate, cancel, streaming, error, usage, limitReached, clearLimit };
 }

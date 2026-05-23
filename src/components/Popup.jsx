@@ -125,7 +125,7 @@ export default function Popup() {
 
   const { templates, refresh: refreshTemplates } = useTemplates();
 
-  const { generate, cancel, streaming, error } = useClaudeAPI();
+  const { generate, cancel, streaming, error, limitReached, clearLimit } = useClaudeAPI();
   const { addEntry } = useHistory();
   const generatedRef = useRef('');
   const hideTimerRef = useRef(null);
@@ -329,6 +329,13 @@ export default function Popup() {
           <Header subtitle={subtitle} mode={mode} onClose={handleClose} onBack={handleBackToEdit} />
           <div className="h-px bg-white/[0.07] shrink-0" />
 
+          {limitReached ? (
+            <UpgradeNotice
+              kind={limitReached}
+              onUpgrade={() => { window.flowwrite?.openMain?.('dashboard'); handleClose(); }}
+              onDismiss={() => { clearLimit(); setMode('compose'); }}
+            />
+          ) : (
           <AnimatePresence mode="wait">
             {mode === 'compose' ? (
               <ComposeView
@@ -368,9 +375,40 @@ export default function Popup() {
               />
             )}
           </AnimatePresence>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+// ─── Upgrade notice (free-tier limit hit) ─────────────────────────────────────
+
+function UpgradeNotice({ kind, onUpgrade, onDismiss }) {
+  const label = kind === 'audio' ? 'voice dictation' : 'AI generations';
+  return (
+    <motion.div
+      className="flex-1 flex flex-col items-center justify-center text-center gap-3 px-3"
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <div className="w-11 h-11 rounded-full bg-accent/20 flex items-center justify-center text-xl">⚡</div>
+      <div>
+        <p className="text-white font-semibold text-sm mb-1">You've hit your free weekly limit</p>
+        <p className="text-white/50 text-xs leading-relaxed">
+          You've used all your free {label} this week. It resets Monday — or go Pro for unlimited.
+        </p>
+      </div>
+      <button
+        onClick={onUpgrade}
+        className="w-full px-4 py-2.5 bg-accent rounded-lg text-sm font-medium text-white hover:bg-accent/80 active:scale-95 transition-all"
+      >
+        Upgrade to Pro
+      </button>
+      <button onClick={onDismiss} className="text-white/40 hover:text-white/70 text-xs transition-colors">
+        Maybe later
+      </button>
+    </motion.div>
   );
 }
 

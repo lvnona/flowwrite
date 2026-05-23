@@ -573,12 +573,21 @@ const OPENAI_MODELS = [
   { value: 'gpt-4-turbo',  label: 'GPT-4 Turbo' },
 ];
 
+const DEEPSEEK_MODELS = [
+  { value: 'deepseek-v4-flash', label: 'DeepSeek-V4 Flash (fast & cost-efficient)' },
+  { value: 'deepseek-v4-pro',   label: 'DeepSeek-V4 Pro (frontier reasoning)' },
+  { value: 'deepseek-chat',     label: 'deepseek-chat (legacy · retires Jul 2026)' },
+  { value: 'deepseek-reasoner', label: 'deepseek-reasoner (legacy · retires Jul 2026)' },
+];
+
 function ApiKeysSection({ apiKeys, saveApiKeys }) {
   const [draft, setDraft] = useState({
     popupProvider:    'claude',
     anthropic:        '',
     openaiPopup:      '',
     openaiPopupModel: 'gpt-4o',
+    deepseek:         '',
+    deepseekModel:    'deepseek-v4-flash',
     openai:           '',
   });
   const [populated, setPopulated] = useState(false);
@@ -589,13 +598,15 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
   // One-time populate from Firestore once loaded.
   useEffect(() => {
     if (populated) return;
-    const hasData = apiKeys.anthropic || apiKeys.openaiPopup || apiKeys.openai || apiKeys.popupProvider;
+    const hasData = apiKeys.anthropic || apiKeys.openaiPopup || apiKeys.deepseek || apiKeys.openai || apiKeys.popupProvider;
     if (hasData) {
       setDraft({
         popupProvider:    apiKeys.popupProvider    || 'claude',
         anthropic:        apiKeys.anthropic        || '',
         openaiPopup:      apiKeys.openaiPopup      || '',
         openaiPopupModel: apiKeys.openaiPopupModel || 'gpt-4o',
+        deepseek:         apiKeys.deepseek         || '',
+        deepseekModel:    apiKeys.deepseekModel    || 'deepseek-v4-flash',
         openai:           apiKeys.openai           || '',
       });
       setPopulated(true);
@@ -619,7 +630,10 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
     }
   }
 
-  const isClaude = draft.popupProvider === 'claude';
+  const provider = draft.popupProvider;
+  const isClaude = provider === 'claude';
+  const isOpenai = provider === 'openai';
+  const isDeepseek = provider === 'deepseek';
 
   return (
     <div className="max-w-xl">
@@ -646,13 +660,11 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
               </span>
               <div className="flex gap-2">
                 {[
-                  { value: 'claude', label: 'Claude (Anthropic)', color: 'violet' },
-                  { value: 'openai', label: 'ChatGPT (OpenAI)',   color: 'emerald' },
-                ].map(({ value, label, color }) => {
+                  { value: 'claude',   label: 'Claude',   ring: 'border-violet-400/60 bg-violet-500/15 text-violet-200' },
+                  { value: 'openai',   label: 'ChatGPT',  ring: 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200' },
+                  { value: 'deepseek', label: 'DeepSeek', ring: 'border-sky-400/60 bg-sky-500/15 text-sky-200' },
+                ].map(({ value, label, ring }) => {
                   const active = draft.popupProvider === value;
-                  const ring = color === 'violet'
-                    ? 'border-violet-400/60 bg-violet-500/15 text-violet-200'
-                    : 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200';
                   return (
                     <button key={value} type="button"
                       onClick={() => setDraft((d) => ({ ...d, popupProvider: value }))}
@@ -677,7 +689,7 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
             )}
 
             {/* OpenAI popup key + model (shown when provider = openai) */}
-            {!isClaude && (
+            {isOpenai && (
               <div className="flex flex-col gap-4">
                 <KeyField
                   label="OpenAI API Key (popup)"
@@ -700,6 +712,31 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
                 </label>
               </div>
             )}
+
+            {/* DeepSeek key + model (shown when provider = deepseek) */}
+            {isDeepseek && (
+              <div className="flex flex-col gap-4">
+                <KeyField
+                  label="DeepSeek API Key (popup)"
+                  hint="Used for popup text generation via DeepSeek (OpenAI-compatible API)."
+                  placeholder="sk-…"
+                  value={draft.deepseek}
+                  onChange={set('deepseek')}
+                />
+                <label className="block">
+                  <span className="text-[10px] uppercase tracking-wider text-white/40">Model</span>
+                  <select
+                    value={draft.deepseekModel}
+                    onChange={(e) => setDraft((d) => ({ ...d, deepseekModel: e.target.value }))}
+                    className="mt-1.5 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5
+                               text-sm focus:outline-none focus:border-violet-400/50 transition">
+                    {DEEPSEEK_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
           </div>
 
           {/* Cost reference */}
@@ -711,7 +748,7 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
               <div className="text-[10px] text-white/40 mb-0.5">Per generation</div>
               <div className="text-sm font-mono text-amber-300">${COST_PER_POPUP.toFixed(3)}</div>
               <div className="text-[10px] text-white/25 mt-0.5">
-                {isClaude ? 'Claude Opus est.' : 'GPT-4o est.'}
+                {isClaude ? 'Claude Opus est.' : isDeepseek ? 'DeepSeek est.' : 'GPT-4o est.'}
               </div>
             </div>
           </div>

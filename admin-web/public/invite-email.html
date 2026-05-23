@@ -1,0 +1,86 @@
+<!--
+  FlowWrite invite email template.
+  send-invite.php replaces {{LINK}} (download/welcome URL) and {{EMAIL}}.
+  Kept deliberately simple (table layout + inline styles) for email-client
+  compatibility and good spam scores.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>You're invited to FlowWrite</title>
+  </head>
+  <body style="margin:0; padding:0; background:#0f0f1a; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f0f1a; padding:32px 16px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px; background:#16131f; border:1px solid rgba(255,255,255,0.08); border-radius:18px; overflow:hidden;">
+
+            <!-- Header -->
+            <tr>
+              <td style="padding:36px 36px 8px 36px;" align="center">
+                <div style="font-size:30px; line-height:1;">✨</div>
+                <h1 style="margin:14px 0 0 0; color:#ffffff; font-size:22px; font-weight:700; letter-spacing:-0.3px;">
+                  You're invited to FlowWrite
+                </h1>
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td style="padding:16px 36px 8px 36px;" align="center">
+                <p style="margin:0; color:rgba(255,255,255,0.66); font-size:15px; line-height:1.6;">
+                  FlowWrite is an AI writing assistant that helps you write better
+                  emails, messages and posts — right where you type, in any app.
+                </p>
+              </td>
+            </tr>
+
+            <!-- CTA -->
+            <tr>
+              <td style="padding:24px 36px 8px 36px;" align="center">
+                <a href="{{LINK}}"
+                   style="display:inline-block; background:linear-gradient(135deg,#7c6af7,#a89dfc); color:#ffffff; text-decoration:none; font-size:15px; font-weight:600; padding:14px 30px; border-radius:12px;">
+                  Download FlowWrite
+                </a>
+              </td>
+            </tr>
+
+            <!-- Steps -->
+            <tr>
+              <td style="padding:18px 36px 8px 36px;">
+                <p style="margin:0 0 8px 0; color:rgba(255,255,255,0.5); font-size:13px; line-height:1.7;">
+                  <strong style="color:rgba(255,255,255,0.75);">1.</strong> Download &amp; install the app for Mac or Windows.<br />
+                  <strong style="color:rgba(255,255,255,0.75);">2.</strong> Open it and sign in with your Google account.<br />
+                  <strong style="color:rgba(255,255,255,0.75);">3.</strong> Press the hotkey anywhere to start writing.
+                </p>
+              </td>
+            </tr>
+
+            <!-- Fallback link -->
+            <tr>
+              <td style="padding:14px 36px 30px 36px;" align="center">
+                <p style="margin:0; color:rgba(255,255,255,0.3); font-size:12px; line-height:1.6;">
+                  If the button doesn't work, paste this link into your browser:<br />
+                  <a href="{{LINK}}" style="color:#a89dfc; word-break:break-all;">{{LINK}}</a>
+                </p>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="padding:18px 36px; border-top:1px solid rgba(255,255,255,0.07);" align="center">
+                <p style="margin:0; color:rgba(255,255,255,0.28); font-size:11px; line-height:1.6;">
+                  This invite was sent to {{EMAIL}}. If you weren't expecting it, you can ignore this email.<br />
+                  © FlowWrite
+                </p>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

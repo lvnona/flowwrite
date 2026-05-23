@@ -46,7 +46,11 @@ export async function* stream(prompt, signal) {
     .generateText({ prompt })
     .then((res) => {
       finalText = res?.text ?? '';
-      if (!res?.ok) finalError = new Error(res?.error || 'Generation failed');
+      if (!res?.ok) {
+        finalError = new Error(res?.error || 'Generation failed');
+        // Surface free-tier limit signals so the UI can show an upgrade prompt.
+        if (res?.limitReached) finalError.limitReached = res.limitReached;
+      }
     })
     .catch((err) => { finalError = err; })
     .finally(() => { finished = true; drainNotify(); });

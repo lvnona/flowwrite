@@ -1,0 +1,68 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# FlowWrite — flowwrite.u11.ca
+#   /        → index.html   (marketing landing page, static)
+#   /admin   → admin.html   (React admin SPA)
+#   other    → index.html   (graceful fallback to the home page)
+# ─────────────────────────────────────────────────────────────────────────────
+
+Options -MultiViews -Indexes
+RewriteEngine On
+
+# ── Force HTTPS ──────────────────────────────────────────────────────────────
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+# ── Pretty URL for the admin panel ───────────────────────────────────────────
+RewriteRule ^admin/?$ admin.html [L]
+
+# ── Serve real files/dirs directly; otherwise fall back to the landing page ──
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.html [QSA,L]
+
+# ── Custom error page ────────────────────────────────────────────────────────
+ErrorDocument 404 /index.html
+
+# ── Protect config/helper includes (underscore-prefixed PHP) ─────────────────
+<FilesMatch "^_.*\.php$">
+  Require all denied
+</FilesMatch>
+# Never serve the service-account key if it ever lands in the web root.
+<FilesMatch "(service-account|serviceaccount).*\.json$">
+  Require all denied
+</FilesMatch>
+
+# ── Security headers ─────────────────────────────────────────────────────────
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "geolocation=(), camera=(), microphone=()"
+  # HSTS — keep once you're confident HTTPS is permanent.
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+</IfModule>
+
+# ── Compression ──────────────────────────────────────────────────────────────
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/javascript application/javascript application/json image/svg+xml
+</IfModule>
+
+# ── Caching ──────────────────────────────────────────────────────────────────
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType image/png "access plus 6 months"
+  ExpiresByType image/x-icon "access plus 6 months"
+  ExpiresByType image/svg+xml "access plus 6 months"
+  ExpiresByType font/woff2 "access plus 1 year"
+  ExpiresByType text/html "access plus 0 seconds"
+</IfModule>
+<IfModule mod_headers.c>
+  <FilesMatch "\.(css|js|png|ico|svg|woff2)$">
+    Header set Cache-Control "public, max-age=15552000, immutable"
+  </FilesMatch>
+  <FilesMatch "\.html$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>

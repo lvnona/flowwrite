@@ -144,6 +144,13 @@ export default function DictationBar() {
       });
       const text = res?.ok ? (res.text || '').trim() : '';
       if (!text) {
+        // Free weekly dictation limit — show a brief upgrade hint, then dismiss.
+        if (res && !res.ok && res.limitReached) {
+          setErrorMsg('Free limit reached — go Pro');
+          setState('error');
+          setTimeout(() => { window.flowwrite?.dictationCancel?.(); setState('idle'); }, 2200);
+          return;
+        }
         if (res && !res.ok) setErrorMsg(res.error || 'No speech detected');
         await window.flowwrite?.dictationCancel?.();
         setState('idle');

@@ -1,7 +1,7 @@
 // History page — last 50 generations stored in electron-store.
 // Click "Copy" to put any past output back on the clipboard.
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useHistory } from '../hooks/useHistory.js';
 import NavBar from '../components/NavBar.jsx';
 
@@ -18,6 +18,16 @@ function relTime(ts) {
 
 export default function History() {
   const { entries, clear, refresh } = useHistory();
+  const [historyOn, setHistoryOn] = useState(null); // null=loading
+
+  useEffect(() => {
+    window.flowwrite?.getSettings?.().then((s) => setHistoryOn(s?.historyEnabled === true));
+  }, []);
+
+  async function enableHistory() {
+    await window.flowwrite?.saveSettings?.({ historyEnabled: true });
+    setHistoryOn(true);
+  }
 
   const grouped = useMemo(() => {
     // Group by day for a more readable feed.
@@ -50,6 +60,20 @@ export default function History() {
           <button className="pill" onClick={clear}>Clear all</button>
         </div>
       </div>
+
+      {historyOn === false && (
+        <div className="rounded-xl bg-accent/10 border border-accent/30 p-4 mb-6 flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm font-medium">History is turned off for privacy</p>
+            <p className="text-[12px] text-white/50 mt-0.5">
+              New generations aren't being saved. Turn it on if you'd like a local record.
+            </p>
+          </div>
+          <button className="gradient-btn text-[12px] px-4 py-2 shrink-0" onClick={enableHistory}>
+            Enable history
+          </button>
+        </div>
+      )}
 
       {entries.length === 0 ? (
         <div className="rounded-xl bg-white/[0.04] border border-white/10 p-8 text-center">

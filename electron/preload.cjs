@@ -40,6 +40,11 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // App version string (for the Dashboard footer).
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
+  // Membership / usage limits
+  setPlan: (plan) => ipcRenderer.invoke('set-plan', plan),
+  getUsage: () => ipcRenderer.invoke('get-usage'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
   // macOS permissions (Permissions tab in Settings)
   getPermissions: () => ipcRenderer.invoke('get-permissions'),
   requestMicrophone: () => ipcRenderer.invoke('request-microphone'),

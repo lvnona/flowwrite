@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /admin.html
+Disallow: /send-invite.php
+
+Sitemap: https://flowwrite.u11.ca/sitemap.xml

@@ -55,6 +55,9 @@ const store = new Store({
       // Launch FlowWrite automatically when you log into your computer.
       // Applied via app.setLoginItemSettings (works on Windows + macOS).
       launchAtLogin: false,
+      // Privacy: store recent generations in History. OFF by default so a fresh
+      // install never keeps a record of what you wrote unless you opt in.
+      historyEnabled: false,
     },
     history: [],
     // Legacy stores — kept only as a one-time migration source into `templates`.
@@ -74,6 +77,11 @@ const store = new Store({
     //   weekly  — { 'YYYY-Www': count } per ISO week
     //   monthly — { 'YYYY-MM':  count } per calendar month
     transcriberStats: { words: 0, weekly: {}, monthly: {} },
+    // Popup AI-generation usage stats (mirror of transcriberStats, for limits).
+    generationStats: { count: 0, weekly: {}, monthly: {} },
+    // The signed-in user's plan, pushed from the renderer after auth. Drives
+    // free-tier limit enforcement in the main process. 'free' | 'pro' | 'team'.
+    membership: { plan: 'free' },
     // Centralised API keys, set by the admin (in the admin panel → Firestore)
     // and pushed here by the renderer. Customers never see or edit these.
     //
@@ -87,6 +95,8 @@ const store = new Store({
       anthropic:         '',
       openaiPopup:       '',
       openaiPopupModel:  'gpt-4o',
+      deepseek:          '',
+      deepseekModel:     'deepseek-v4-flash',
       openai:            '',
     },
   },
@@ -104,6 +114,25 @@ function isoWeekKey(d = new Date()) {
   const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
   const week = Math.ceil((((utc - yearStart) / 86_400_000) + 1) / 7);
   return `${utc.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+// ── Subscription limits ──────────────────────────────────────────────────────
+// Free tier is metered per ISO week (reset is automatic — a new week is a new
+// key starting at 0). Pro/team are unlimited. Enforced here in the main process
+// so every path (popup generate, popup mic, Fn dictation bar) is covered.
+const FREE_LIMITS = { generationsPerWeek: 50, audioWordsPerWeek: 2500 };
+
+function currentPlan() { return store.get('membership')?.plan || 'free'; }
+function isUnlimited() { const p = currentPlan(); return p === 'pro' || p === 'team'; }
+function weeklyGenerations() { return (store.get('generationStats')?.weekly || {})[isoWeekKey()] || 0; }
+function weeklyAudioWords() { return (store.get('transcriberStats')?.weekly || {})[isoWeekKey()] || 0; }
+function bumpGenerations() {
+  const s = store.get('generationStats') || { count: 0, weekly: {}, monthly: {} };
+  s.count = (s.count || 0) + 1;
+  s.weekly = s.weekly || {}; s.monthly = s.monthly || {};
+  s.weekly[isoWeekKey()] = (s.weekly[isoWeekKey()] || 0) + 1;
+  s.monthly[monthKey()] = (s.monthly[monthKey()] || 0) + 1;
+  store.set('generationStats', s);
 }
 
 // Holds references so they are not garbage-collected.
@@ -511,6 +540,8 @@ ipcMain.handle('set-api-keys', (_e, keys = {}) => {
     anthropic:        str(keys.anthropic,        prev.anthropic),
     openaiPopup:      str(keys.openaiPopup,      prev.openaiPopup),
     openaiPopupModel: str(keys.openaiPopupModel, prev.openaiPopupModel || 'gpt-4o'),
+    deepseek:         str(keys.deepseek,         prev.deepseek),
+    deepseekModel:    str(keys.deepseekModel,    prev.deepseekModel || 'deepseek-v4-flash'),
     openai:           str(keys.openai,           prev.openai),
   });
   return { ok: true };
@@ -523,6 +554,11 @@ ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('get-history', () => store.get('history'));
 
 ipcMain.handle('add-history', (_e, entry) => {
+  // Privacy: only persist history when the user has explicitly turned it on.
+  // (Default is off, so nothing is stored unless the user opts in.)
+  if (store.get('settings')?.historyEnabled !== true) {
+    return store.get('history') || [];
+  }
   const history = store.get('history');
   const updated = [{ ...entry, timestamp: Date.now() }, ...history].slice(0, 50);
   store.set('history', updated);
@@ -703,6 +739,42 @@ ipcMain.handle('open-permission-settings', (_e, which) => {
   return { ok: true };
 });
 
+// ── Membership / usage limits ────────────────────────────────────────────────
+
+// Renderer pushes the signed-in user's plan after auth so main can enforce
+// limits. Pushed from the main/popup windows only (never the dictation window).
+ipcMain.handle('set-plan', (_e, plan) => {
+  store.set('membership', { plan: plan === 'pro' || plan === 'team' ? plan : 'free' });
+  return { ok: true };
+});
+
+// Snapshot of this week's usage vs the active plan's limits (for the dashboard).
+ipcMain.handle('get-usage', () => {
+  const plan = currentPlan();
+  const unlimited = isUnlimited();
+  return {
+    plan,
+    unlimited,
+    generations: {
+      used: weeklyGenerations(),
+      limit: unlimited ? null : FREE_LIMITS.generationsPerWeek,
+    },
+    audioWords: {
+      used: weeklyAudioWords(),
+      limit: unlimited ? null : FREE_LIMITS.audioWordsPerWeek,
+    },
+  };
+});
+
+// Open an external URL in the user's browser (used for Stripe checkout/portal).
+ipcMain.handle('open-external', (_e, url) => {
+  if (typeof url === 'string' && /^https:\/\//i.test(url)) {
+    shell.openExternal(url);
+    return { ok: true };
+  }
+  return { ok: false, error: 'Invalid URL' };
+});
+
 /**
  * One-time migration: fold legacy userTemplates (style examples → purpose
  * "Post") and emailTemplates (→ purpose "Email") into the unified `templates`
@@ -776,6 +848,15 @@ ipcMain.handle('generate-text', async (event, { prompt }) => {
   const keys     = store.get('apiKeys') || {};
   const provider = keys.popupProvider || 'claude';
 
+  // ── Free-tier weekly limit ────────────────────────────────────────────────
+  if (!isUnlimited() && weeklyGenerations() >= FREE_LIMITS.generationsPerWeek) {
+    return {
+      ok: false,
+      limitReached: 'generations',
+      error: `You've used all ${FREE_LIMITS.generationsPerWeek} free generations this week.`,
+    };
+  }
+
   // ── Claude (Anthropic) path ──────────────────────────────────────────────
   if (provider === 'claude') {
     const apiKey = keys.anthropic || store.get('settings').anthropicApiKey;
@@ -797,6 +878,7 @@ ipcMain.handle('generate-text', async (event, { prompt }) => {
           event.sender.send('generate:chunk', text);
         }
       }
+      bumpGenerations();
       return { ok: true, text: full };
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
@@ -826,13 +908,44 @@ ipcMain.handle('generate-text', async (event, { prompt }) => {
           event.sender.send('generate:chunk', text);
         }
       }
+      bumpGenerations();
       return { ok: true, text: full };
     } catch (err) {
       return { ok: false, error: err.message || String(err) };
     }
   }
 
-  return { ok: false, error: `Unknown popup provider: "${provider}". Set it to "claude" or "openai" in the API Keys settings.` };
+  // ── DeepSeek path (OpenAI-compatible API) ────────────────────────────────
+  if (provider === 'deepseek') {
+    const apiKey = keys.deepseek;
+    if (!apiKey) {
+      return { ok: false, error: 'DeepSeek API key is not configured. Please ask the administrator to add it in the API Keys settings.' };
+    }
+    const model = keys.deepseekModel || 'deepseek-v4-flash';
+    try {
+      const client = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' });
+      const stream = await client.chat.completions.create({
+        model,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+        stream: true,
+      });
+      let full = '';
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (text) {
+          full += text;
+          event.sender.send('generate:chunk', text);
+        }
+      }
+      bumpGenerations();
+      return { ok: true, text: full };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  return { ok: false, error: `Unknown popup provider: "${provider}". Set it to "claude", "openai" or "deepseek" in the API Keys settings.` };
 });
 
 ipcMain.handle('autofill-text', async (_e, { text, targetField }) => {
@@ -916,6 +1029,14 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
   const settings = store.get('settings');
   if (settings.transcriberEnabled === false) {
     return { ok: false, error: 'Audio transcriber is turned off in Settings.' };
+  }
+  // Free-tier weekly dictation limit (resets automatically each ISO week).
+  if (!isUnlimited() && weeklyAudioWords() >= FREE_LIMITS.audioWordsPerWeek) {
+    return {
+      ok: false,
+      limitReached: 'audio',
+      error: `You've used all ${FREE_LIMITS.audioWordsPerWeek} free dictated words this week.`,
+    };
   }
   const openaiKey = store.get('apiKeys')?.openai || settings.openaiApiKey;
   if (!openaiKey) {
