@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Welcome to FlowWrite Pro 🎉</title>
+  <link rel="icon" href="/favicon.ico" />
+  <style>
+    :root {
+      --bg: #0d0b16;
+      --accent: #6c63ff;
+      --accent-soft: #8a82ff;
+      --accent-bright: #a99dff;
+      --grad: linear-gradient(135deg, #8a82ff 0%, #6c63ff 100%);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: #fff;
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+      overflow: hidden;
+      position: relative;
+    }
+    /* glow */
+    body::before {
+      content: ""; position: fixed; inset: 0; pointer-events: none;
+      background: radial-gradient(60% 55% at 50% 0%, rgba(108,99,255,.35) 0%, rgba(108,99,255,0) 70%);
+    }
+    .card {
+      position: relative; z-index: 2;
+      width: 100%; max-width: 520px; text-align: center;
+      background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.02));
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 28px;
+      padding: 48px 40px;
+      box-shadow: 0 30px 80px rgba(0,0,0,.5);
+      animation: rise .6s cubic-bezier(.2,.8,.2,1) both;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+
+    .check {
+      width: 84px; height: 84px; border-radius: 50%;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 24px;
+      box-shadow: 0 0 0 8px rgba(108,99,255,.12), 0 12px 30px rgba(108,99,255,.4);
+      animation: pop .5s .2s cubic-bezier(.2,1.4,.4,1) both;
+    }
+    .check svg { width: 44px; height: 44px; }
+    .check path {
+      stroke: #fff; stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round;
+      stroke-dasharray: 48; stroke-dashoffset: 48;
+      animation: draw .4s .55s ease forwards;
+    }
+    @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+
+    .badge {
+      display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .08em;
+      text-transform: uppercase; color: var(--accent-bright);
+      background: rgba(108,99,255,.14); border: 1px solid rgba(108,99,255,.35);
+      border-radius: 999px; padding: 5px 14px; margin-bottom: 18px;
+    }
+    h1 { font-size: 28px; line-height: 1.15; margin-bottom: 12px; }
+    h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    p.lead { font-size: 15px; color: rgba(255,255,255,.6); line-height: 1.6; margin-bottom: 28px; }
+
+    ul.perks {
+      list-style: none; text-align: left; max-width: 340px; margin: 0 auto 30px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    ul.perks li { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; color: rgba(255,255,255,.82); }
+    ul.perks li svg { width: 18px; height: 18px; color: var(--accent-soft); flex-shrink: 0; margin-top: 2px; }
+
+    .cta {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      background: var(--grad); color: #fff; font-size: 15px; font-weight: 600;
+      border: none; border-radius: 14px; padding: 14px 28px; cursor: pointer;
+      text-decoration: none; transition: transform .15s ease, box-shadow .15s ease;
+      box-shadow: 0 10px 30px rgba(108,99,255,.4);
+    }
+    .cta:hover { transform: translateY(-1px); box-shadow: 0 14px 36px rgba(108,99,255,.5); }
+    .hint { margin-top: 18px; font-size: 13px; color: rgba(255,255,255,.45); line-height: 1.5; }
+    .hint strong { color: rgba(255,255,255,.7); }
+    .home { display: inline-block; margin-top: 22px; font-size: 13px; color: var(--accent-bright); text-decoration: none; }
+    .home:hover { text-decoration: underline; }
+
+    /* confetti */
+    .confetti { position: fixed; top: -10px; width: 9px; height: 14px; opacity: .9; z-index: 1; border-radius: 2px;
+      animation: fall linear forwards; }
+    @keyframes fall {
+      0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+      100% { transform: translateY(105vh) rotate(540deg); opacity: 0; }
+    }
+    @media (prefers-reduced-motion: reduce) { .confetti { display: none; } .card, .check, .check path { animation: none; } .check path { stroke-dashoffset: 0; } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="check">
+      <svg viewBox="0 0 56 56"><path d="M14 29 L24 39 L43 18" /></svg>
+    </div>
+    <span class="badge">Subscription confirmed</span>
+    <h1>Welcome to <span class="grad">FlowWrite Pro</span> 🎉</h1>
+    <p class="lead">Your payment went through and your account is upgraded. Everything's unlocked — no limits.</p>
+
+    <ul class="perks">
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><strong>Unlimited</strong> AI generations</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span><strong>Unlimited</strong> voice dictation</span></li>
+      <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg><span>Priority access to new features</span></li>
+    </ul>
+
+    <a class="cta" href="/">Back to FlowWrite</a>
+
+    <p class="hint">
+      <strong>Next:</strong> open the FlowWrite app from your menu bar (macOS) or
+      system tray (Windows). It switches to Pro automatically within a few seconds.
+    </p>
+
+    <a class="home" href="/">← Return to homepage</a>
+  </div>
+
+  <script>
+    // Lightweight confetti burst.
+    (function () {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      var colors = ['#8a82ff', '#6c63ff', '#a99dff', '#ffffff', '#b5a8ff'];
+      for (var i = 0; i < 80; i++) {
+        var c = document.createElement('div');
+        c.className = 'confetti';
+        c.style.left = Math.random() * 100 + 'vw';
+        c.style.background = colors[Math.floor(Math.random() * colors.length)];
+        c.style.animationDuration = (2.5 + Math.random() * 2) + 's';
+        c.style.animationDelay = (Math.random() * 1.2) + 's';
+        c.style.transform = 'scale(' + (0.6 + Math.random()) + ')';
+        document.body.appendChild(c);
+        setTimeout((function (el) { return function () { el.remove(); }; })(c), 6000);
+      }
+    })();
+  </script>
+</body>
+</html>

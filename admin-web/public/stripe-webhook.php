@@ -11,7 +11,28 @@
 //                                          customer cancelled)
 
 require __DIR__ . '/_firebase.php';
-$cfg = require __DIR__ . '/_stripe-config.php';
+require __DIR__ . '/_mailer.php';
+$cfg  = fw_load_config();        // local bootstrap + Firestore config/billing overlay
+$MAIL = fw_mail_cfg($cfg);       // SMTP creds + owner-alert email from that config
+
+// Best-effort owner alert on a new subscriber. Never throws — a mail failure
+// must not make the webhook return non-200 (Stripe would retry and double-send).
+function fw_notify_owner($mail, $email, $uid) {
+  if (empty($mail['owner_notify'])) return;
+  try {
+    $e = htmlspecialchars($email, ENT_QUOTES);
+    $u = htmlspecialchars($uid, ENT_QUOTES);
+    fw_smtp_send(
+      $mail,
+      $mail['owner_notify'],
+      '🎉 New FlowWrite Pro subscriber',
+      "New Pro subscriber: $email\nFirebase UID: $uid",
+      "<h2 style=\"font-family:system-ui,sans-serif\">🎉 New FlowWrite Pro subscriber</h2>"
+      . "<p style=\"font-family:system-ui,sans-serif;font-size:15px\"><strong>$e</strong></p>"
+      . "<p style=\"font-family:system-ui,sans-serif;color:#666;font-size:13px\">Firebase UID: $u</p>"
+    );
+  } catch (Exception $ex) { /* swallow — never break the webhook */ }
+}
 
 // 1. Read the raw body + verify the Stripe signature.
 $payload = file_get_contents('php://input');
@@ -56,6 +77,9 @@ try {
       'subscriptionId'     => $obj['subscription'] ?? '',
       'subscriptionStatus' => 'active',
     ]);
+    // Alert the owner that someone just subscribed (best-effort).
+    $custEmail = $obj['customer_details']['email'] ?? $obj['customer_email'] ?? 'unknown';
+    fw_notify_owner($MAIL, $custEmail, $uid);
   } elseif ($type === 'customer.subscription.updated' || $type === 'customer.subscription.deleted') {
     $uid    = $obj['metadata']['firebase_uid'] ?? '';
     $status = $obj['status'] ?? 'canceled';

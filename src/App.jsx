@@ -19,6 +19,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import Admin from './pages/Admin.jsx';
 import Login from './pages/Login.jsx';
 import Setup from './pages/Setup.jsx';
+import Onboarding from './components/Onboarding.jsx';
 
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useAuth } from './hooks/useAuth.js';
@@ -74,6 +75,15 @@ function readRoute() {
 export default function App() {
   const [route, setRoute] = useState(readRoute);
   const { user, profile, loading } = useAuth();
+
+  // First-run onboarding flag (main window only). null = still loading.
+  const [onboarded, setOnboarded] = useState(null);
+  useEffect(() => {
+    if (route === 'popup' || route === 'dictation' || route === 'admin') return;
+    window.flowwrite?.getSettings?.()
+      .then((s) => setOnboarded(s?.onboarded === true))
+      .catch(() => setOnboarded(true));
+  }, [route]);
 
   // Push the signed-in user's plan + this week's PER-ACCOUNT usage into the main
   // process so it can enforce the free-tier weekly limits across devices. Skip
@@ -167,6 +177,17 @@ export default function App() {
   if (!user) {
     if (route === 'popup') return <PopupSignIn />;
     return <Login />;
+  }
+
+  // First-run onboarding — main window pages only (not popup/dictation/admin).
+  const mainPage = route === 'dashboard' || route === 'settings' || route === 'history';
+  if (mainPage) {
+    if (onboarded === null) {
+      return <div className="page-bg flex items-center justify-center text-white/60">Loading…</div>;
+    }
+    if (onboarded === false) {
+      return <Onboarding onDone={() => setOnboarded(true)} />;
+    }
   }
 
   // 3. Signed in — render the requested page.

@@ -6,7 +6,8 @@
 // The uid is attached as client_reference_id AND on the subscription metadata,
 // so the webhook can map every future subscription event back to the user.
 
-$cfg = require __DIR__ . '/_stripe-config.php';
+require __DIR__ . '/_firebase.php';
+$cfg = fw_load_config();   // local bootstrap + Firestore config/billing overlay
 
 $uid   = isset($_GET['uid']) ? trim($_GET['uid']) : '';
 $email = isset($_GET['email']) ? trim($_GET['email']) : '';

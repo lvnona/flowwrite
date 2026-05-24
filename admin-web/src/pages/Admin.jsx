@@ -11,7 +11,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { signOut } from '../firebase.js';
-import { useAdmin } from '../hooks/useAdmin.js';
+import { useAdmin, ADMIN_UID } from '../hooks/useAdmin.js';
 
 // ── Cost constants (edit to keep in sync with actual API pricing) ─────────────
 // Claude Opus  ≈ $15/MTok in + $75/MTok out; ~500 in + 300 out per popup request
@@ -74,17 +74,34 @@ function fmtCost(n) {
   return `$${n.toFixed(2)}`;
 }
 
+// Stripe stores current_period_end as UNIX seconds.
+function fmtPeriodEnd(sec) {
+  if (!sec) return '—';
+  return fmtDate(sec * 1000);
+}
+
+const SUB_STATUS_STYLE = {
+  active:   'text-emerald-300 border-emerald-400/40 bg-emerald-500/10',
+  trialing: 'text-sky-300 border-sky-400/40 bg-sky-500/10',
+  past_due: 'text-amber-300 border-amber-400/40 bg-amber-500/10',
+  canceled: 'text-red-300 border-red-400/40 bg-red-500/10',
+  unpaid:   'text-red-300 border-red-400/40 bg-red-500/10',
+};
+
 // ── Root component ────────────────────────────────────────────────────────────
 
 export default function AdminPanel({ user }) {
   const {
-    users, invites, loading, error, isAdmin,
+    users, invites, loading, error, isAdmin, isSuperAdmin, adminResolved,
+    adminUids, addAdmin, removeAdmin,
     refresh, inviteUser, resendInvite, deleteInvite,
     updatePlan, updateStatus, updateExpiry, deleteUser,
+    resetFreeWeeklyUsage,
     apiKeys, saveApiKeys,
+    billing, saveBilling,
   } = useAdmin(user);
 
-  const [tab, setTab]           = useState('users'); // 'users' | 'apikeys'
+  const [tab, setTab]           = useState('users'); // 'users' | 'subscribers' | 'apikeys' | 'config'
   const [search, setSearch]     = useState('');
   const [showInvite, setShowInvite] = useState(false);
   const month = thisMonthKey();
@@ -104,6 +121,15 @@ export default function AdminPanel({ user }) {
       (u) => u.email?.toLowerCase().includes(q) || u.displayName?.toLowerCase().includes(q),
     );
   }, [users, search]);
+
+  // Still determining whether this account is an admin (config/admins read).
+  if (!adminResolved) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-white/40 text-sm">
+        Checking access…
+      </div>
+    );
+  }
 
   if (!isAdmin) {
     return (
@@ -130,8 +156,10 @@ export default function AdminPanel({ user }) {
 
             {/* Tabs */}
             <div className="hidden sm:flex items-center ml-4 bg-white/5 border border-white/10 rounded-xl p-1 gap-1">
-              <TabBtn active={tab === 'users'}   onClick={() => setTab('users')}>Users</TabBtn>
-              <TabBtn active={tab === 'apikeys'} onClick={() => setTab('apikeys')}>API Keys</TabBtn>
+              <TabBtn active={tab === 'users'}       onClick={() => setTab('users')}>Users</TabBtn>
+              <TabBtn active={tab === 'subscribers'} onClick={() => setTab('subscribers')}>Subscribers</TabBtn>
+              <TabBtn active={tab === 'apikeys'}     onClick={() => setTab('apikeys')}>API Keys</TabBtn>
+              <TabBtn active={tab === 'config'}      onClick={() => setTab('config')}>Config</TabBtn>
             </div>
           </div>
 
@@ -149,8 +177,10 @@ export default function AdminPanel({ user }) {
 
         {/* Mobile tabs */}
         <div className="sm:hidden flex gap-1 mt-2 bg-white/5 border border-white/10 rounded-xl p-1">
-          <TabBtn active={tab === 'users'}   onClick={() => setTab('users')}>Users</TabBtn>
-          <TabBtn active={tab === 'apikeys'} onClick={() => setTab('apikeys')}>API Keys</TabBtn>
+          <TabBtn active={tab === 'users'}       onClick={() => setTab('users')}>Users</TabBtn>
+          <TabBtn active={tab === 'subscribers'} onClick={() => setTab('subscribers')}>Subs</TabBtn>
+          <TabBtn active={tab === 'apikeys'}     onClick={() => setTab('apikeys')}>Keys</TabBtn>
+          <TabBtn active={tab === 'config'}      onClick={() => setTab('config')}>Config</TabBtn>
         </div>
       </header>
 
@@ -179,6 +209,7 @@ export default function AdminPanel({ user }) {
                 <span className="text-base leading-none">+</span>
                 <span className="hidden sm:inline">Invite</span>
               </button>
+              <ResetFreeButton onReset={resetFreeWeeklyUsage} />
               <button type="button" onClick={refresh} title="Refresh"
                 className="shrink-0 w-10 h-10 flex items-center justify-center rounded-xl
                            border border-white/10 bg-white/5 hover:bg-white/10 transition text-base">
@@ -261,9 +292,25 @@ export default function AdminPanel({ user }) {
           </>
         )}
 
+        {/* ── SUBSCRIBERS TAB ───────────────────────────────────────────── */}
+        {tab === 'subscribers' && (
+          <SubscribersSection
+            users={users} loading={loading} error={error} refresh={refresh}
+          />
+        )}
+
         {/* ── API KEYS TAB ──────────────────────────────────────────────── */}
         {tab === 'apikeys' && (
           <ApiKeysSection apiKeys={apiKeys} saveApiKeys={saveApiKeys} />
+        )}
+
+        {/* ── CONFIG TAB ────────────────────────────────────────────────── */}
+        {tab === 'config' && (
+          <ConfigSection
+            billing={billing} saveBilling={saveBilling}
+            isSuperAdmin={isSuperAdmin} users={users}
+            adminUids={adminUids} addAdmin={addAdmin} removeAdmin={removeAdmin}
+          />
         )}
       </main>
 
@@ -562,6 +609,376 @@ function StatCard({ label, value, accent }) {
       <div className="text-2xl sm:text-3xl font-bold tabular-nums">{value}</div>
       <div className="text-[10px] uppercase tracking-wider text-white/40 mt-1 leading-tight">{label}</div>
     </div>
+  );
+}
+
+// ── Reset-free-usage button ─────────────────────────────────────────────────
+
+function ResetFreeButton({ onReset }) {
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(0);
+
+  async function handle() {
+    if (!window.confirm(
+      "Reset THIS WEEK's usage counters (popup generations + dictated words) "
+      + 'for ALL free users? They get a fresh weekly allowance immediately. '
+      + 'Pro/Team users are unaffected.',
+    )) return;
+    setBusy(true);
+    try {
+      const n = await onReset();
+      setDone(n);
+      setTimeout(() => setDone(0), 3000);
+    } catch (e) {
+      window.alert(`Reset failed: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button type="button" onClick={handle} disabled={busy} title="Reset free users' weekly usage"
+      className="shrink-0 h-10 px-3 flex items-center gap-1.5 rounded-xl border border-amber-400/30
+                 bg-amber-500/10 text-amber-300 text-xs font-medium hover:bg-amber-500/20
+                 transition disabled:opacity-50">
+      {busy ? '…' : done ? `✓ Reset ${done}` : '⟲ Reset free usage'}
+    </button>
+  );
+}
+
+// ── Subscribers tab ──────────────────────────────────────────────────────────
+
+function SubscribersSection({ users, loading, error, refresh }) {
+  const subs = useMemo(
+    () => users
+      .filter((u) => u.plan === 'pro' || u.plan === 'team')
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
+    [users],
+  );
+
+  const mrr = subs.length * 10; // $10/mo Pro — rough gross MRR
+
+  return (
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+        <StatCard label="Active subscribers" value={subs.length} accent />
+        <StatCard label="Pro" value={subs.filter((u) => u.plan === 'pro').length} />
+        <StatCard label="Est. gross MRR" value={`$${mrr}`} />
+      </div>
+
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold">Subscribers</h2>
+        <button type="button" onClick={refresh} title="Refresh"
+          className="shrink-0 w-9 h-9 flex items-center justify-center rounded-xl
+                     border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm">↻</button>
+      </div>
+
+      {loading && <div className="py-16 text-center text-white/40 text-sm">Loading…</div>}
+      {error   && <div className="py-8 text-center text-red-400 text-sm">{error}</div>}
+
+      {!loading && !error && (
+        subs.length === 0 ? (
+          <div className="py-16 text-center text-white/30 text-sm">
+            No paid subscribers yet. When someone completes Stripe checkout they'll appear here.
+          </div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block rounded-2xl border border-white/10 overflow-x-auto">
+              <table className="w-full text-sm" style={{ minWidth: 760 }}>
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-white/30 border-b border-white/10 bg-white/[0.025]">
+                    <th className="text-left px-4 py-3">Subscriber</th>
+                    <th className="text-left px-4 py-3">Plan</th>
+                    <th className="text-left px-4 py-3">Subscription</th>
+                    <th className="text-right px-4 py-3">Renews / ends</th>
+                    <th className="text-right px-4 py-3">Member since</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {subs.map((u) => (
+                    <tr key={u.uid} className="border-b border-white/5 hover:bg-white/[0.02] transition">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <Avatar user={u} />
+                          <div className="min-w-0">
+                            <div className="font-medium truncate max-w-[180px]">{u.displayName || '—'}</div>
+                            <div className="text-[11px] text-white/40 truncate max-w-[180px]">{u.email}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-xs font-semibold rounded-full px-2.5 py-1 border ${PLAN_STYLE[u.plan]}`}>
+                          {u.plan === 'team' ? 'Team' : 'Pro'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[11px] font-medium rounded-full px-2.5 py-1 border
+                          ${SUB_STATUS_STYLE[u.subscriptionStatus] || 'text-white/50 border-white/15 bg-white/5'}`}>
+                          {u.subscriptionStatus || (u.stripeCustomerId ? 'active' : 'manual')}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right text-white/60 text-xs">{fmtPeriodEnd(u.currentPeriodEnd)}</td>
+                      <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtDate(u.createdAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden flex flex-col gap-3">
+              {subs.map((u) => (
+                <div key={u.uid} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+                  <div className="flex items-start gap-3 mb-3">
+                    <Avatar user={u} size="md" />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate">{u.displayName || '—'}</div>
+                      <div className="text-xs text-white/40 truncate">{u.email}</div>
+                    </div>
+                    <span className={`text-xs font-semibold rounded-full px-2.5 py-1 border ${PLAN_STYLE[u.plan]}`}>
+                      {u.plan === 'team' ? 'Team' : 'Pro'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
+                    <MiniStat label="Subscription" value={u.subscriptionStatus || (u.stripeCustomerId ? 'active' : 'manual')} />
+                    <MiniStat label="Renews / ends" value={fmtPeriodEnd(u.currentPeriodEnd)} />
+                    <MiniStat label="Member since" value={fmtDate(u.createdAt)} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs text-white/25 mt-4 text-right">
+              {subs.length} subscriber{subs.length !== 1 ? 's' : ''}
+            </p>
+          </>
+        )
+      )}
+    </>
+  );
+}
+
+// ── Admins manager (super-admin only) ────────────────────────────────────────
+
+function AdminsManager({ users, adminUids, addAdmin, removeAdmin }) {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy]   = useState(false);
+  const [err,  setErr]    = useState('');
+  const [done, setDone]   = useState('');
+
+  const emailFor = (uid) => users.find((u) => u.uid === uid)?.email || uid;
+  const superEmail = emailFor(ADMIN_UID);
+
+  async function handleAdd(e) {
+    e.preventDefault();
+    setErr(''); setDone('');
+    const clean = email.trim().toLowerCase();
+    if (!clean) return;
+    const match = users.find((u) => (u.email || '').toLowerCase() === clean);
+    if (!match) {
+      setErr('No signed-in user with that email. They must open FlowWrite and sign in once first.');
+      return;
+    }
+    if (match.uid === ADMIN_UID) { setErr('That account is already the super-admin.'); return; }
+    if (adminUids.includes(match.uid)) { setErr('That user is already an admin.'); return; }
+    setBusy(true);
+    try {
+      await addAdmin(match.uid);
+      setDone(`Added ${clean} as admin.`);
+      setEmail('');
+      setTimeout(() => setDone(''), 2500);
+    } catch (e2) {
+      setErr(e2.message || 'Failed to add admin.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemove(uid) {
+    if (!window.confirm(`Remove admin access for ${emailFor(uid)}?`)) return;
+    try { await removeAdmin(uid); } catch (e) { window.alert(`Failed: ${e.message}`); }
+  }
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 mb-6">
+      <div className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Admins</div>
+      <p className="text-[11px] text-white/35 mb-4 leading-relaxed">
+        Admins have full access — all users, billing secrets and API keys. Only
+        you (the super-admin) can change this list.
+      </p>
+
+      <div className="rounded-xl border border-white/10 divide-y divide-white/5 overflow-hidden mb-4">
+        {/* Super admin (permanent) */}
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+          <span className="truncate text-white/80">{superEmail}</span>
+          <span className="shrink-0 text-[10px] rounded-full px-2 py-0.5 border text-violet-300 bg-violet-500/10 border-violet-400/30">
+            Super-admin
+          </span>
+        </div>
+        {/* Additional admins */}
+        {adminUids.filter((uid) => uid !== ADMIN_UID).map((uid) => (
+          <div key={uid} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+            <span className="truncate text-white/80 min-w-0">{emailFor(uid)}</span>
+            <button type="button" onClick={() => handleRemove(uid)}
+              className="shrink-0 text-[11px] text-red-400/70 hover:text-red-400 border border-red-400/20
+                         hover:border-red-400/40 rounded-lg px-2.5 py-1 transition">
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <form onSubmit={handleAdd} className="flex items-center gap-2">
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+          placeholder="Add admin by email (must have signed in once)…"
+          className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm
+                     placeholder-white/25 focus:outline-none focus:border-violet-400/50 transition" />
+        <button type="submit" disabled={busy}
+          className="shrink-0 px-4 py-2.5 rounded-xl bg-violet-500/90 hover:bg-violet-500 text-white
+                     text-sm font-medium transition disabled:opacity-50">
+          {busy ? '…' : 'Add'}
+        </button>
+      </form>
+      {err  && <div className="mt-2 text-xs text-red-400">{err}</div>}
+      {done && <div className="mt-2 text-xs text-emerald-400">✓ {done}</div>}
+    </div>
+  );
+}
+
+// ── Config section (Stripe + email + URLs, stored in Firestore) ───────────────
+
+function ConfigSection({ billing, saveBilling, isSuperAdmin, users, adminUids, addAdmin, removeAdmin }) {
+  const [draft, setDraft] = useState(billing);
+  const [populated, setPopulated] = useState(false);
+  const [busy, setBusy]   = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err,  setErr]    = useState('');
+
+  // Populate once Firestore data arrives.
+  useEffect(() => {
+    if (populated) return;
+    const hasData = billing && (billing.stripe_secret_key || billing.smtp_user || billing.stripe_price_id);
+    if (hasData) { setDraft(billing); setPopulated(true); }
+  }, [billing, populated]);
+
+  function set(field) { return (v) => setDraft((d) => ({ ...d, [field]: v })); }
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setErr(''); setBusy(true);
+    try {
+      await saveBilling(draft);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e2) {
+      setErr(e2.message || 'Failed to save config.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="max-w-xl">
+      <h2 className="text-base font-semibold mb-1">Configuration</h2>
+      <p className="text-xs text-white/40 mb-2 leading-relaxed">
+        Stripe, email and URL settings — stored securely in Firestore and read by
+        the server. Editing here means you never have to touch files on the host
+        again. Secrets are masked; only the service-account path stays in a file.
+      </p>
+      <div className="text-[11px] text-amber-300/70 bg-amber-500/5 border border-amber-400/20 rounded-lg px-3 py-2 mb-6">
+        These values include live secrets (Stripe key, mailbox password). They're
+        stored admin-only and sent over HTTPS — keep your admin account secure.
+      </div>
+
+      {/* Admins — super-admin only */}
+      {isSuperAdmin && (
+        <AdminsManager users={users} adminUids={adminUids} addAdmin={addAdmin} removeAdmin={removeAdmin} />
+      )}
+
+      <form onSubmit={handleSave} className="flex flex-col gap-5">
+
+        {/* Stripe */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-4">
+          <div className="text-[10px] uppercase tracking-wider text-white/30">Stripe</div>
+          <KeyField label="Secret key" hint="sk_test_… (test mode) or sk_live_… (live)."
+            placeholder="sk_test_…" value={draft.stripe_secret_key} onChange={set('stripe_secret_key')} />
+          <TextInput label="Price ID" hint="The recurring Pro price — starts with price_ (NOT prod_)."
+            placeholder="price_…" value={draft.stripe_price_id} onChange={set('stripe_price_id')} />
+          <KeyField label="Webhook signing secret" hint="whsec_… from your webhook endpoint."
+            placeholder="whsec_…" value={draft.stripe_webhook_secret} onChange={set('stripe_webhook_secret')} />
+        </div>
+
+        {/* URLs */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-4">
+          <div className="text-[10px] uppercase tracking-wider text-white/30">URLs</div>
+          <TextInput label="Site URL" value={draft.site_url} onChange={set('site_url')} placeholder="https://flowwrite.u11.ca" />
+          <TextInput label="Success URL" hint="Where Stripe sends users after paying."
+            value={draft.success_url} onChange={set('success_url')} placeholder="https://flowwrite.u11.ca/?upgraded=1" />
+          <TextInput label="Cancel URL" value={draft.cancel_url} onChange={set('cancel_url')} placeholder="https://flowwrite.u11.ca/?cancelled=1" />
+          <TextInput label="Billing-portal return URL" value={draft.return_url} onChange={set('return_url')} placeholder="https://flowwrite.u11.ca/" />
+        </div>
+
+        {/* Email / SMTP */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-4">
+          <div className="text-[10px] uppercase tracking-wider text-white/30">Email (SMTP)</div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <TextInput label="SMTP host" value={draft.smtp_host} onChange={set('smtp_host')} placeholder="mail.u11.ca" />
+            </div>
+            <TextInput label="Port" value={String(draft.smtp_port ?? '')} onChange={set('smtp_port')} placeholder="465" />
+          </div>
+          <TextInput label="SMTP username" value={draft.smtp_user} onChange={set('smtp_user')} placeholder="flowwrite@u11.ca" />
+          <KeyField label="Mailbox password" hint="The password for the SMTP mailbox above."
+            placeholder="••••••••" value={draft.smtp_pass} onChange={set('smtp_pass')} />
+          <div className="grid grid-cols-2 gap-3">
+            <TextInput label="From email" value={draft.from_email} onChange={set('from_email')} placeholder="flowwrite@u11.ca" />
+            <TextInput label="From name" value={draft.from_name} onChange={set('from_name')} placeholder="FlowWrite" />
+          </div>
+          <TextInput label="Owner alert email" hint="Gets a 🎉 alert on each new Pro subscriber. Blank = off."
+            value={draft.owner_notify} onChange={set('owner_notify')} placeholder="you@example.com" />
+        </div>
+
+        {/* Invite */}
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-4">
+          <div className="text-[10px] uppercase tracking-wider text-white/30">Invites</div>
+          <KeyField label="Invite secret" hint="Must match what you type in the Invite dialog. Leave blank to keep the built-in fallback."
+            placeholder="long random string" value={draft.invite_secret} onChange={set('invite_secret')} />
+        </div>
+
+        {err && (
+          <div className="text-xs text-red-400 bg-red-500/10 border border-red-400/20 rounded-lg px-3 py-2">{err}</div>
+        )}
+
+        <div className="flex items-center gap-3">
+          <button type="submit" disabled={busy}
+            className="px-5 py-2 rounded-xl bg-violet-500/90 hover:bg-violet-500 text-white
+                       text-sm font-medium transition disabled:opacity-50">
+            {busy ? 'Saving…' : 'Save config'}
+          </button>
+          {saved && <span className="text-xs text-emerald-400">✓ Saved — live immediately</span>}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TextInput({ label, hint, placeholder, value, onChange }) {
+  return (
+    <label className="block">
+      <span className="text-[10px] uppercase tracking-wider text-white/40">{label}</span>
+      {hint && <span className="block text-[11px] text-white/30 mt-0.5 mb-1.5">{hint}</span>}
+      <input
+        type="text"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        spellCheck={false}
+        className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm
+                   placeholder-white/20 focus:outline-none focus:border-violet-400/50 transition"
+      />
+    </label>
   );
 }
 

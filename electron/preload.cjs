@@ -40,6 +40,16 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // App version string (for the Dashboard footer).
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
+  // Manual update check + install (auto-update also runs silently in the
+  // background; this is the visible "Check for updates" button).
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  quitAndInstall: () => ipcRenderer.invoke('quit-and-install'),
+  onUpdateStatus: (cb) => {
+    const listener = (_e, payload) => cb(payload);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
+
   // Membership / usage limits
   setPlan: (plan) => ipcRenderer.invoke('set-plan', plan),
   setUsage: (u) => ipcRenderer.invoke('set-usage', u),

@@ -213,6 +213,8 @@ export default function Settings() {
             </p>
           </div>
 
+          <UpdatesCard />
+
           <label className="flex items-start gap-3 mb-5 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -629,6 +631,80 @@ function PermRow({ title, why, ok, statusText, actionLabel, onAction }) {
         <button type="button" className="pill text-[12px] shrink-0" onClick={onAction}>
           {actionLabel}
         </button>
+      )}
+    </div>
+  );
+}
+
+// ── Updates card ─────────────────────────────────────────────────────────────
+// Auto-update runs silently in the background; this gives a visible
+// "Check for updates" button + live status (and a Restart button when ready).
+function UpdatesCard() {
+  const [version, setVersion] = useState('');
+  const [status, setStatus] = useState({ state: 'idle' });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    window.flowwrite?.getAppVersion?.().then((v) => v && setVersion(v));
+    const off = window.flowwrite?.onUpdateStatus?.((p) => {
+      setStatus(p || { state: 'idle' });
+      if (p?.state && !['checking', 'downloading'].includes(p.state)) setBusy(false);
+    });
+    return () => off?.();
+  }, []);
+
+  async function check() {
+    setBusy(true);
+    setStatus({ state: 'checking' });
+    try {
+      const r = await window.flowwrite?.checkForUpdates?.();
+      // Background events drive richer states; this covers the immediate reply.
+      if (r) setStatus(r);
+      if (r && !['available', 'downloading'].includes(r.state)) setBusy(false);
+    } catch {
+      setStatus({ state: 'error' });
+      setBusy(false);
+    }
+  }
+
+  const { state, percent, version: newV, message } = status;
+  const text = {
+    idle: 'Updates install automatically in the background.',
+    checking: 'Checking for updates…',
+    'not-available': "You're on the latest version ✓",
+    available: `Update available${newV ? ` (v${newV})` : ''} — downloading…`,
+    downloading: `Downloading update… ${percent || 0}%`,
+    downloaded: `Update ${newV ? `v${newV} ` : ''}ready to install.`,
+    error: 'Couldn’t check right now. Please try again.',
+    dev: 'Updates only run in the installed app (you’re in development).',
+  }[state] || '';
+
+  const color =
+    state === 'not-available' || state === 'downloaded' ? 'text-green-300'
+      : state === 'error' ? 'text-red-300'
+        : 'text-white/45';
+
+  return (
+    <div className="mb-5 p-4 rounded-xl border border-white/10 bg-white/[0.04]">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">FlowWrite{version && <span className="text-white/40 font-normal"> · v{version}</span>}</div>
+          <div className={'text-[12px] mt-0.5 ' + color}>{text}</div>
+        </div>
+        {state === 'downloaded' ? (
+          <button type="button" className="gradient-btn text-[12px] px-4 py-2 shrink-0"
+            onClick={() => window.flowwrite?.quitAndInstall?.()}>
+            Restart to update
+          </button>
+        ) : (
+          <button type="button" className="pill text-[12px] shrink-0" onClick={check}
+            disabled={busy || state === 'checking' || state === 'downloading'}>
+            {state === 'checking' || state === 'downloading' ? 'Checking…' : 'Check for updates'}
+          </button>
+        )}
+      </div>
+      {state === 'error' && message && (
+        <p className="text-[11px] text-white/30 mt-1.5 truncate">{message}</p>
       )}
     </div>
   );

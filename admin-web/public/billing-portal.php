@@ -6,7 +6,7 @@
 // and redirects to it.
 
 require __DIR__ . '/_firebase.php';
-$cfg = require __DIR__ . '/_stripe-config.php';
+$cfg = fw_load_config();   // local bootstrap + Firestore config/billing overlay
 
 $uid = isset($_GET['uid']) ? trim($_GET['uid']) : '';
 if ($uid === '') { http_response_code(400); echo 'Missing uid'; exit; }

@@ -53,6 +53,21 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Server-side billing + email configuration (Stripe keys, price, webhook
+    // secret, SMTP credentials, owner-alert email, URLs). Edited from the admin
+    // panel; read by the PHP backend via the service account (which bypasses
+    // these rules). Contains SECRETS — admin-only read, NOT "any signed-in user".
+    match /config/billing {
+      allow read, write: if isAdmin();
+    }
+
+    // The admin list ({ uids: [...] }). Any admin may read it (so the panel can
+    // show it); ONLY the permanent super-admin may change it.
+    match /config/admins {
+      allow read:  if isAdmin();
+      allow write: if isSuperAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
@@ -62,8 +77,21 @@ service cloud.firestore {
     return request.auth != null && request.auth.uid == userId;
   }
 
-  function isAdmin() {
+  // Permanent super-admin (lvnona@gmail.com) — can never be removed and is the
+  // only account allowed to edit the admin list.
+  function isSuperAdmin() {
     return request.auth != null &&
       request.auth.uid == 'B8npzkB2vdh2DSf52wHZfNmBSS92';
+  }
+
+  // Additional admins are stored in config/admins as { uids: [...] }.
+  function isListedAdmin() {
+    return request.auth != null
+      && exists(/databases/(default)/documents/config/admins)
+      && request.auth.uid in get(/databases/(default)/documents/config/admins).data.get('uids', []);
+  }
+
+  function isAdmin() {
+    return isSuperAdmin() || isListedAdmin();
   }
 }

@@ -59,6 +59,57 @@ function fw_doc_url($project, $uid) {
   return "https://firestore.googleapis.com/v1/projects/$project/databases/(default)/documents/users/" . rawurlencode($uid);
 }
 
+// Generic document URL: fw_collection_doc_url($p, 'config', 'billing').
+function fw_collection_doc_url($project, $collection, $docId) {
+  return "https://firestore.googleapis.com/v1/projects/$project/databases/(default)/documents/"
+    . rawurlencode($collection) . '/' . rawurlencode($docId);
+}
+
+// Decode Firestore typed values (one field) → plain PHP scalar.
+function fw_untype($v) {
+  if (!is_array($v)) return $v;
+  if (array_key_exists('stringValue', $v))   return $v['stringValue'];
+  if (array_key_exists('integerValue', $v))  return (int)$v['integerValue'];
+  if (array_key_exists('doubleValue', $v))   return (float)$v['doubleValue'];
+  if (array_key_exists('booleanValue', $v))  return (bool)$v['booleanValue'];
+  if (array_key_exists('nullValue', $v))     return null;
+  return null;
+}
+
+// Read an arbitrary config doc (e.g. config/billing) → assoc of plain values,
+// or [] if missing. Uses the service account, so it bypasses security rules.
+function fw_get_config_doc($cfg, $docId) {
+  list($token, $project) = fw_google_token($cfg['service_account_path']);
+  list($code, $res) = fw_http('GET', fw_collection_doc_url($project, 'config', $docId), null, [
+    "Authorization: Bearer $token",
+  ]);
+  if ($code !== 200) return [];
+  $j = json_decode($res, true);
+  $out = [];
+  foreach (($j['fields'] ?? []) as $k => $v) $out[$k] = fw_untype($v);
+  return $out;
+}
+
+// Load the effective config: start from the local bootstrap file
+// (_stripe-config.php — only needs `service_account_path`), then overlay any
+// values stored in Firestore (config/billing), which win when non-empty. This
+// lets every setting be managed from the admin panel while file replacements
+// never clobber them.
+function fw_load_config() {
+  $local = require __DIR__ . '/_stripe-config.php';
+  if (empty($local['service_account_path'])) return $local; // can't reach Firestore
+  $cfg = $local;
+  try {
+    $remote = fw_get_config_doc($local, 'billing');
+    foreach ($remote as $k => $v) {
+      if ($v !== '' && $v !== null) $cfg[$k] = $v;
+    }
+  } catch (Exception $e) {
+    /* network/SA error → fall back to local values only */
+  }
+  return $cfg;
+}
+
 // Read a user doc → assoc of typed values, or null.
 function fw_get_user($cfg, $uid) {
   list($token, $project) = fw_google_token($cfg['service_account_path']);

@@ -481,15 +481,30 @@ function applyLaunchAtLogin(enabled) {
  * installs them on the next quit — users never re-download manually. macOS
  * auto-update requires the app to be signed/notarized (it is).
  */
+// Push update status to the main window so the "Check for updates" UI can
+// reflect it ({ state, version?, percent?, message? }).
+function sendUpdateStatus(payload) {
+  try { mainWindow?.webContents?.send('update:status', payload); } catch { /* ignore */ }
+}
+
+let updaterWired = false;
+function wireUpdaterEvents() {
+  if (updaterWired) return;
+  updaterWired = true;
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ state: 'checking' }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ state: 'available', version: info?.version }));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus({ state: 'not-available' }));
+  autoUpdater.on('download-progress', (p) => sendUpdateStatus({ state: 'downloading', percent: Math.round(p?.percent || 0) }));
+  autoUpdater.on('update-downloaded', (info) => sendUpdateStatus({ state: 'downloaded', version: info?.version }));
+  autoUpdater.on('error', (e) => sendUpdateStatus({ state: 'error', message: e?.message || String(e) }));
+}
+
 function initAutoUpdate() {
   if (!app.isPackaged) return;
   try {
     autoUpdater.autoDownload = true;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.on('error', (e) => console.warn('[FlowWrite] auto-update error:', e?.message || e));
-    autoUpdater.on('update-available', (info) => console.info('[FlowWrite] update available:', info?.version));
-    autoUpdater.on('update-downloaded', (info) =>
-      console.info('[FlowWrite] update', info?.version, 'downloaded — installs on quit.'));
+    wireUpdaterEvents();
     autoUpdater.checkForUpdatesAndNotify();
     // Re-check every 6 hours for long-running sessions.
     setInterval(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 6 * 60 * 60 * 1000);
@@ -497,6 +512,27 @@ function initAutoUpdate() {
     console.warn('[FlowWrite] auto-update init failed:', err?.message || err);
   }
 }
+
+// Manual "Check for updates" trigger from the renderer.
+ipcMain.handle('check-for-updates', async () => {
+  if (!app.isPackaged) return { state: 'dev', version: app.getVersion() };
+  try {
+    wireUpdaterEvents();
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    const r = await autoUpdater.checkForUpdates();
+    const latest = r?.updateInfo?.version;
+    const isNewer = latest && latest !== app.getVersion();
+    return { state: isNewer ? 'available' : 'not-available', version: latest || app.getVersion() };
+  } catch (err) {
+    return { state: 'error', message: err?.message || String(err) };
+  }
+});
+
+// "Restart to update" — installs the downloaded update now.
+ipcMain.handle('quit-and-install', () => {
+  try { autoUpdater.quitAndInstall(); } catch (e) { console.warn('[FlowWrite] quitAndInstall failed:', e?.message || e); }
+});
 
 app.whenReady().then(() => {
   // ── Microphone access (voice dictation) ───────────────────────────────────

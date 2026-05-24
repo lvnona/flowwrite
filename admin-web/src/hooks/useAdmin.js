@@ -17,8 +17,43 @@ import { firestore, auth } from '../firebase.js';
 
 // Firestore document that holds the admin-managed API keys.
 const API_KEYS_REF = () => doc(firestore, 'config', 'apiKeys');
+// Server-side billing + email config (Stripe, SMTP, URLs). Admin-only.
+const BILLING_REF = () => doc(firestore, 'config', 'billing');
 
+const BILLING_DEFAULTS = {
+  stripe_secret_key: '',
+  stripe_price_id: '',
+  stripe_webhook_secret: '',
+  site_url: 'https://flowwrite.u11.ca',
+  success_url: 'https://flowwrite.u11.ca/thank-you.html',
+  cancel_url: 'https://flowwrite.u11.ca/?cancelled=1',
+  return_url: 'https://flowwrite.u11.ca/',
+  smtp_host: 'mail.u11.ca',
+  smtp_port: 465,
+  smtp_user: 'flowwrite@u11.ca',
+  smtp_pass: '',
+  from_email: 'flowwrite@u11.ca',
+  from_name: 'FlowWrite',
+  owner_notify: '',
+  invite_secret: '',
+};
+
+// Permanent super-admin (lvnona@gmail.com). Hardcoded so no one can ever lock
+// the owner out, and only this account can edit the admin list. Additional
+// admins are stored in Firestore (config/admins) and managed from the panel.
 export const ADMIN_UID = 'B8npzkB2vdh2DSf52wHZfNmBSS92';
+const ADMINS_REF = () => doc(firestore, 'config', 'admins');
+
+// ISO-week key (e.g. "2026-W21") — must match the key the app reads/writes for
+// weekly usage counters, so resetting here actually clears the live count.
+function isoWeekKey(d = new Date()) {
+  const utc = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = utc.getUTCDay() || 7;
+  utc.setUTCDate(utc.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((utc - yearStart) / 86_400_000) + 1) / 7);
+  return `${utc.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
 
 // PHP mailer (same origin on HostArmada) + the landing page invite links open.
 const SEND_INVITE_URL = '/send-invite.php';
@@ -36,10 +71,54 @@ export function useAdmin(user) {
     deepseekModel:    'deepseek-v4-flash',
     openai:           '',
   });
+  const [billing, setBilling] = useState(BILLING_DEFAULTS);
+  const [adminUids, setAdminUids] = useState([]);
+  const [adminsLoaded, setAdminsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState(null);
 
-  const isAdmin = user?.uid === ADMIN_UID;
+  const isSuperAdmin = user?.uid === ADMIN_UID;
+  const isAdmin = isSuperAdmin || (!!user && adminUids.includes(user.uid));
+  // True once we know whether this user is an admin (super-admin is instant;
+  // additional admins resolve after the config/admins read).
+  const adminResolved = isSuperAdmin || adminsLoaded;
+
+  // Resolve the admin list. Not gated on isAdmin (chicken-and-egg): a real
+  // additional admin can read config/admins via the rule; a non-admin's read is
+  // denied → treated as "not an admin".
+  const fetchAdmins = useCallback(async () => {
+    if (!user) { setAdminsLoaded(true); return; }
+    try {
+      const snap = await getDoc(ADMINS_REF());
+      setAdminUids(snap.exists() ? (snap.data().uids || []) : []);
+    } catch {
+      setAdminUids([]);
+    } finally {
+      setAdminsLoaded(true);
+    }
+  }, [user]);
+
+  useEffect(() => { fetchAdmins(); }, [fetchAdmins]);
+
+  // Add / remove an additional admin (super-admin only — enforced by rules).
+  const addAdmin = useCallback(async (uid) => {
+    const clean = (uid || '').trim();
+    if (!clean) throw new Error('Missing user id.');
+    if (clean === ADMIN_UID) throw new Error('That account is already the super-admin.');
+    const next = Array.from(new Set([...adminUids, clean]));
+    await setDoc(ADMINS_REF(), {
+      uids: next, updatedAt: serverTimestamp(), updatedBy: auth.currentUser?.uid || null,
+    }, { merge: true });
+    setAdminUids(next);
+  }, [adminUids]);
+
+  const removeAdmin = useCallback(async (uid) => {
+    const next = adminUids.filter((u) => u !== uid);
+    await setDoc(ADMINS_REF(), {
+      uids: next, updatedAt: serverTimestamp(), updatedBy: auth.currentUser?.uid || null,
+    }, { merge: true });
+    setAdminUids(next);
+  }, [adminUids]);
 
   const fetchUsers = useCallback(async () => {
     if (!isAdmin) return;
@@ -162,6 +241,45 @@ export function useAdmin(user) {
     setUsers((prev) => prev.map((u) => (u.uid === uid ? { ...u, expiresAt: ms } : u)));
   }, []);
 
+  // Reset the CURRENT week's free-tier usage counters (popup generations +
+  // dictated words) for every free user — i.e. give them a fresh weekly
+  // allowance immediately, without waiting for the Monday auto-reset.
+  // Returns the number of users affected.
+  const resetFreeWeeklyUsage = useCallback(async () => {
+    const week = isoWeekKey();
+    const targets = users.filter((u) => (u.plan || 'free') === 'free');
+    await Promise.all(targets.map((u) =>
+      updateDoc(doc(firestore, 'users', u.uid), {
+        [`usageWeekly.${week}`]: 0,
+        [`audioWordsWeekly.${week}`]: 0,
+      }),
+    ));
+    setUsers((prev) => prev.map((u) => ((u.plan || 'free') === 'free'
+      ? {
+          ...u,
+          usageWeekly: { ...(u.usageWeekly || {}), [week]: 0 },
+          audioWordsWeekly: { ...(u.audioWordsWeekly || {}), [week]: 0 },
+        }
+      : u)));
+    return targets.length;
+  }, [users]);
+
+  // Reset a single user's current-week usage counters.
+  const resetUserWeeklyUsage = useCallback(async (uid) => {
+    const week = isoWeekKey();
+    await updateDoc(doc(firestore, 'users', uid), {
+      [`usageWeekly.${week}`]: 0,
+      [`audioWordsWeekly.${week}`]: 0,
+    });
+    setUsers((prev) => prev.map((u) => (u.uid === uid
+      ? {
+          ...u,
+          usageWeekly: { ...(u.usageWeekly || {}), [week]: 0 },
+          audioWordsWeekly: { ...(u.audioWordsWeekly || {}), [week]: 0 },
+        }
+      : u)));
+  }, []);
+
   // Delete the user's Firestore record entirely.
   const deleteUser = useCallback(async (uid) => {
     await deleteDoc(doc(firestore, 'users', uid));
@@ -209,11 +327,43 @@ export function useAdmin(user) {
     setApiKeys(trimmed);
   }, []);
 
+  // ── Billing + email config (admin-managed, stored in config/billing) ──────
+
+  const fetchBilling = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const snap = await getDoc(BILLING_REF());
+      if (snap.exists()) {
+        setBilling({ ...BILLING_DEFAULTS, ...snap.data() });
+      }
+    } catch { /* non-fatal */ }
+  }, [isAdmin]);
+
+  useEffect(() => { fetchBilling(); }, [fetchBilling]);
+
+  const saveBilling = useCallback(async (cfg) => {
+    const out = { ...BILLING_DEFAULTS, ...cfg };
+    // Normalise types: port is an integer; trim strings.
+    out.smtp_port = parseInt(out.smtp_port, 10) || 465;
+    Object.keys(out).forEach((k) => {
+      if (typeof out[k] === 'string') out[k] = out[k].trim();
+    });
+    await setDoc(BILLING_REF(), {
+      ...out,
+      updatedAt: serverTimestamp(),
+      updatedBy: auth.currentUser?.uid || null,
+    }, { merge: true });
+    setBilling(out);
+  }, []);
+
   return {
-    users, loading, error, isAdmin,
+    users, loading, error, isAdmin, isSuperAdmin, adminResolved,
+    adminUids, addAdmin, removeAdmin,
     refresh: fetchUsers,
     updatePlan, updateStatus, updateExpiry, deleteUser,
+    resetFreeWeeklyUsage, resetUserWeeklyUsage,
     invites, inviteUser, resendInvite, deleteInvite,
     apiKeys, saveApiKeys,
+    billing, saveBilling,
   };
 }

@@ -22,6 +22,42 @@
     });
   }
 
+  // ── Post-checkout return banner (?upgraded=1 / ?cancelled=1) ──────────────
+  (function checkoutReturn() {
+    var params = new URLSearchParams(window.location.search);
+    var upgraded = params.has('upgraded');
+    var cancelled = params.has('cancelled');
+    if (!upgraded && !cancelled) return;
+
+    var bar = document.createElement('div');
+    bar.className = 'checkout-toast ' + (upgraded ? 'is-success' : 'is-cancel');
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = upgraded
+      ? '<span class="ct-icon">🎉</span><span class="ct-msg"><strong>You\'re Pro!</strong> '
+        + 'Thanks for subscribing. Your account is upgraded — unlimited generations &amp; voice '
+        + 'dictation. Open FlowWrite and it\'ll switch to Pro automatically.</span>'
+        + '<button class="ct-close" aria-label="Dismiss">&times;</button>'
+      : '<span class="ct-icon">👋</span><span class="ct-msg">Checkout was cancelled — no charge was made. '
+        + 'You can upgrade any time.</span>'
+        + '<button class="ct-close" aria-label="Dismiss">&times;</button>';
+    document.body.appendChild(bar);
+    requestAnimationFrame(function () { bar.classList.add('show'); });
+
+    var close = function () {
+      bar.classList.remove('show');
+      setTimeout(function () { bar.remove(); }, 350);
+    };
+    bar.querySelector('.ct-close').addEventListener('click', close);
+    if (upgraded) setTimeout(close, 9000); else setTimeout(close, 6000);
+
+    // Strip the flag from the URL so a refresh doesn't re-trigger the banner.
+    if (window.history && window.history.replaceState) {
+      params.delete('upgraded'); params.delete('cancelled');
+      var qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+    }
+  })();
+
   // ── Live transcription typewriter ─────────────────────────────────────────
   var textEl = document.getElementById('demoText');
   var ctxEl = document.getElementById('demoCtx');
