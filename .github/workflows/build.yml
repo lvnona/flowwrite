@@ -64,7 +64,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FlowWrite-mac
-          path: dist/FlowWrite-mac.dmg
+          # .dmg = manual download; .zip + latest-mac.yml + .blockmap = auto-update feed.
+          path: |
+            dist/FlowWrite-mac.dmg
+            dist/FlowWrite-mac.zip
+            dist/latest-mac.yml
+            dist/*.blockmap
           retention-days: 30
 
   # ── Windows x64 NSIS installer ────────────────────────────────────────────
@@ -91,7 +96,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FlowWrite-win
-          path: dist/FlowWrite-win-setup.exe
+          # .exe = installer/manual download; latest.yml + .blockmap = auto-update feed.
+          path: |
+            dist/FlowWrite-win-setup.exe
+            dist/latest.yml
+            dist/*.blockmap
           retention-days: 30
 
   # ── GitHub Release (only on version tags: v1.0.0, v1.2.3 …) ─────────────
@@ -128,10 +137,13 @@ jobs:
 
             > **These URLs always point to the latest version.**
 
+            **🔄 Automatic updates:** once installed, FlowWrite updates itself in
+            the background and installs the new version on the next restart — no
+            need to re-download after this first install.
+
             ### macOS install
             1. Download and open `FlowWrite-mac.dmg`
-            2. Drag FlowWrite to Applications
-            3. **First launch:** right-click the app → Open (bypasses Gatekeeper for unsigned builds)
+            2. Drag FlowWrite to Applications and launch it (signed & notarized — opens with no warning)
 
             ### Windows install
             1. Download and run `FlowWrite-win-setup.exe`
@@ -140,5 +152,9 @@ jobs:
           prerelease: false
           files: |
             release-assets/FlowWrite-mac.dmg
+            release-assets/FlowWrite-mac.zip
             release-assets/FlowWrite-win-setup.exe
+            release-assets/latest-mac.yml
+            release-assets/latest.yml
+            release-assets/*.blockmap
           fail_on_unmatched_files: false

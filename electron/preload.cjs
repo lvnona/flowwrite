@@ -42,8 +42,16 @@ contextBridge.exposeInMainWorld('flowwrite', {
 
   // Membership / usage limits
   setPlan: (plan) => ipcRenderer.invoke('set-plan', plan),
+  setUsage: (u) => ipcRenderer.invoke('set-usage', u),
   getUsage: () => ipcRenderer.invoke('get-usage'),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  // Main routes each transcription's word count here (main window only) so an
+  // authed renderer can record it in the user's cloud profile.
+  onAudioWords: (cb) => {
+    const listener = (_e, n) => cb(n);
+    ipcRenderer.on('usage:audio-words', listener);
+    return () => ipcRenderer.removeListener('usage:audio-words', listener);
+  },
 
   // macOS permissions (Permissions tab in Settings)
   getPermissions: () => ipcRenderer.invoke('get-permissions'),

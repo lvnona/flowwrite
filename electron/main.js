@@ -18,6 +18,8 @@ import { existsSync } from 'node:fs';
 import Store from 'electron-store';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI, { toFile } from 'openai';
+import electronUpdater from 'electron-updater';
+const { autoUpdater } = electronUpdater;
 
 import { createTray } from './tray.js';
 import { createPopupWindow, showPopupAt, hidePopup } from './popup.js';
@@ -82,6 +84,10 @@ const store = new Store({
     // The signed-in user's plan, pushed from the renderer after auth. Drives
     // free-tier limit enforcement in the main process. 'free' | 'pro' | 'team'.
     membership: { plan: 'free' },
+    // Per-ACCOUNT usage this ISO week, pushed from the renderer (read from the
+    // user's cloud profile) so limits are enforced per-account across devices,
+    // not per-device. Optimistically bumped here between cloud syncs.
+    cloudUsage: { generationsThisWeek: 0, audioWordsThisWeek: 0 },
     // Centralised API keys, set by the admin (in the admin panel → Firestore)
     // and pushed here by the renderer. Customers never see or edit these.
     //
@@ -124,6 +130,32 @@ const FREE_LIMITS = { generationsPerWeek: 50, audioWordsPerWeek: 2500 };
 
 function currentPlan() { return store.get('membership')?.plan || 'free'; }
 function isUnlimited() { const p = currentPlan(); return p === 'pro' || p === 'team'; }
+// Per-ACCOUNT weekly counts (cloud), used for limit enforcement. Week-aware:
+// a stored count from a previous ISO week reads as 0 (automatic weekly reset).
+function cloudUsageNow() {
+  const u = store.get('cloudUsage') || {};
+  if (u.week !== isoWeekKey()) return { week: isoWeekKey(), generationsThisWeek: 0, audioWordsThisWeek: 0 };
+  return u;
+}
+function cloudGenerations() { return cloudUsageNow().generationsThisWeek || 0; }
+function cloudAudioWords() { return cloudUsageNow().audioWordsThisWeek || 0; }
+function bumpCloudGenerations() {
+  const u = cloudUsageNow();
+  store.set('cloudUsage', {
+    week: isoWeekKey(),
+    generationsThisWeek: (u.generationsThisWeek || 0) + 1,
+    audioWordsThisWeek: u.audioWordsThisWeek || 0,
+  });
+}
+function bumpCloudAudioWords(n) {
+  const u = cloudUsageNow();
+  store.set('cloudUsage', {
+    week: isoWeekKey(),
+    generationsThisWeek: u.generationsThisWeek || 0,
+    audioWordsThisWeek: (u.audioWordsThisWeek || 0) + (n || 0),
+  });
+}
+// Per-DEVICE weekly counts (local), kept for the local transcriber stats only.
 function weeklyGenerations() { return (store.get('generationStats')?.weekly || {})[isoWeekKey()] || 0; }
 function weeklyAudioWords() { return (store.get('transcriberStats')?.weekly || {})[isoWeekKey()] || 0; }
 function bumpGenerations() {
@@ -133,6 +165,7 @@ function bumpGenerations() {
   s.weekly[isoWeekKey()] = (s.weekly[isoWeekKey()] || 0) + 1;
   s.monthly[monthKey()] = (s.monthly[monthKey()] || 0) + 1;
   store.set('generationStats', s);
+  bumpCloudGenerations(); // optimistic per-account bump (reconciled on next cloud sync)
 }
 
 // Holds references so they are not garbage-collected.
@@ -277,6 +310,62 @@ function startFnMonitor() {
   console.info('[FlowWrite] Fn dictation ready — hold the Fn / Globe key to talk.');
 }
 
+// Windows hold-to-talk: a PowerShell helper polls the push-to-talk key's state
+// (~30 ms) and prints DOWN on press / UP on release, which we map to the same
+// start/stop handlers as the Mac Fn key. Polling GetAsyncKeyState is far more
+// robust than a low-level keyboard hook in PowerShell (no message loop, no
+// callback marshalling). Default key: Right Ctrl (VK 0xA3).
+const WIN_PTT_VK = 0xA3; // VK_RCONTROL
+
+function startWindowsPtt() {
+  if (process.platform !== 'win32') return false;
+  if (fnHelper) return true;
+
+  const psScript = [
+    'Add-Type @"',
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public class PTT { [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey); }',
+    '"@',
+    `$vk = ${WIN_PTT_VK}`,
+    '$down = $false',
+    'while ($true) {',
+    '  $pressed = ([PTT]::GetAsyncKeyState($vk) -band 0x8000) -ne 0',
+    '  if ($pressed -and -not $down) { $down = $true; Write-Output "DOWN" }',
+    '  elseif (-not $pressed -and $down) { $down = $false; Write-Output "UP" }',
+    '  Start-Sleep -Milliseconds 30',
+    '}',
+  ].join('\n');
+  const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+  const psPath = process.env.SystemRoot
+    ? `${process.env.SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    : 'powershell';
+
+  try {
+    fnHelper = spawn(psPath, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+      { stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (err) {
+    console.warn('[FlowWrite] Failed to start Windows push-to-talk helper:', err.message);
+    fnHelper = null;
+    return false;
+  }
+
+  let buf = '';
+  fnHelper.stdout.on('data', (chunk) => {
+    buf += chunk.toString();
+    let idx;
+    while ((idx = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (line === 'DOWN') onFnDown();
+      else if (line === 'UP') onFnUp();
+    }
+  });
+  fnHelper.on('exit', () => { fnHelper = null; });
+  console.info('[FlowWrite] Windows push-to-talk ready — hold Right Ctrl to talk.');
+  return true;
+}
+
 function onFnDown() {
   const s = store.get('settings');
   if (s.paused || s.transcriberEnabled === false) return;
@@ -305,8 +394,10 @@ function onFnUp() {
 function resolveDictationHotkey(s) {
   const raw = (s.dictationHotkey || '').trim();
   if (raw === 'Off') return null;
-  if (!raw) return process.platform === 'darwin' ? 'Fn' : 'Control+Shift+Space';
-  if (raw === 'Fn' && process.platform !== 'darwin') return 'Control+Shift+Space';
+  // Platform default: Fn hold-to-talk on macOS, Right-Ctrl hold-to-talk on Windows.
+  if (!raw) return process.platform === 'darwin' ? 'Fn' : 'WinPTT';
+  // 'Fn' chosen on a non-Mac → use the Windows hold-to-talk equivalent.
+  if (raw === 'Fn' && process.platform !== 'darwin') return 'WinPTT';
   return raw;
 }
 
@@ -341,7 +432,18 @@ function registerDictationTrigger() {
 
   const hk = resolveDictationHotkey(store.get('settings'));
   if (!hk) { console.info('[FlowWrite] Dictation shortcut: off.'); return; }
-  if (hk === 'Fn') { startFnMonitor(); return; } // macOS hold-to-talk
+  if (hk === 'Fn') { startFnMonitor(); return; }       // macOS hold-to-talk
+  if (hk === 'WinPTT') {
+    if (startWindowsPtt()) return;                       // Windows hold-to-talk
+    // Helper couldn't start — fall back to a tap-to-toggle accelerator.
+    console.warn('[FlowWrite] Push-to-talk helper unavailable; falling back to Ctrl+Shift+Space toggle.');
+    try {
+      if (globalShortcut.register('Control+Shift+Space', toggleDictation)) {
+        dictationAccelerator = 'Control+Shift+Space';
+      }
+    } catch { /* ignore */ }
+    return;
+  }
 
   try {
     if (globalShortcut.register(hk, toggleDictation)) {
@@ -370,6 +472,29 @@ function applyLaunchAtLogin(enabled) {
     });
   } catch (err) {
     console.warn('[FlowWrite] Could not set launch-at-login:', err.message);
+  }
+}
+
+/**
+ * Auto-update via electron-updater + GitHub Releases. Packaged builds only
+ * (dev has no update feed). Downloads new versions in the background and
+ * installs them on the next quit — users never re-download manually. macOS
+ * auto-update requires the app to be signed/notarized (it is).
+ */
+function initAutoUpdate() {
+  if (!app.isPackaged) return;
+  try {
+    autoUpdater.autoDownload = true;
+    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.on('error', (e) => console.warn('[FlowWrite] auto-update error:', e?.message || e));
+    autoUpdater.on('update-available', (info) => console.info('[FlowWrite] update available:', info?.version));
+    autoUpdater.on('update-downloaded', (info) =>
+      console.info('[FlowWrite] update', info?.version, 'downloaded — installs on quit.'));
+    autoUpdater.checkForUpdatesAndNotify();
+    // Re-check every 6 hours for long-running sessions.
+    setInterval(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 6 * 60 * 60 * 1000);
+  } catch (err) {
+    console.warn('[FlowWrite] auto-update init failed:', err?.message || err);
   }
 }
 
@@ -404,6 +529,7 @@ app.whenReady().then(() => {
   // Sync the OS login item with the saved preference (handles app reinstalls /
   // settings changed while the app wasn't running).
   applyLaunchAtLogin(store.get('settings').launchAtLogin);
+  initAutoUpdate();   // check GitHub Releases for updates (packaged builds only)
 
   tray = createTray({
     onOpenDashboard: () => openMainWindowOn('dashboard'),
@@ -748,7 +874,27 @@ ipcMain.handle('set-plan', (_e, plan) => {
   return { ok: true };
 });
 
-// Snapshot of this week's usage vs the active plan's limits (for the dashboard).
+// Renderer pushes the user's PER-ACCOUNT weekly usage (read from the cloud
+// profile) so limits enforce per-account across devices. We only ever raise the
+// stored value here — a fresh sync that's lower than our optimistic local bump
+// (e.g. Firestore hasn't caught up) shouldn't briefly un-block the user.
+ipcMain.handle('set-usage', (_e, u = {}) => {
+  const wk = isoWeekKey();
+  const cur = cloudUsageNow(); // already zero'd if it was from a previous week
+  const sameWeek = (store.get('cloudUsage') || {}).week === wk;
+  store.set('cloudUsage', {
+    week: wk,
+    generationsThisWeek: sameWeek
+      ? Math.max(cur.generationsThisWeek || 0, Number(u.generationsThisWeek) || 0)
+      : (Number(u.generationsThisWeek) || 0),
+    audioWordsThisWeek: sameWeek
+      ? Math.max(cur.audioWordsThisWeek || 0, Number(u.audioWordsThisWeek) || 0)
+      : (Number(u.audioWordsThisWeek) || 0),
+  });
+  return { ok: true };
+});
+
+// Snapshot of this week's PER-ACCOUNT usage vs the active plan's limits.
 ipcMain.handle('get-usage', () => {
   const plan = currentPlan();
   const unlimited = isUnlimited();
@@ -756,11 +902,11 @@ ipcMain.handle('get-usage', () => {
     plan,
     unlimited,
     generations: {
-      used: weeklyGenerations(),
+      used: cloudGenerations(),
       limit: unlimited ? null : FREE_LIMITS.generationsPerWeek,
     },
     audioWords: {
-      used: weeklyAudioWords(),
+      used: cloudAudioWords(),
       limit: unlimited ? null : FREE_LIMITS.audioWordsPerWeek,
     },
   };
@@ -848,8 +994,8 @@ ipcMain.handle('generate-text', async (event, { prompt }) => {
   const keys     = store.get('apiKeys') || {};
   const provider = keys.popupProvider || 'claude';
 
-  // ── Free-tier weekly limit ────────────────────────────────────────────────
-  if (!isUnlimited() && weeklyGenerations() >= FREE_LIMITS.generationsPerWeek) {
+  // ── Free-tier weekly limit (per-account) ──────────────────────────────────
+  if (!isUnlimited() && cloudGenerations() >= FREE_LIMITS.generationsPerWeek) {
     return {
       ok: false,
       limitReached: 'generations',
@@ -1030,8 +1176,8 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
   if (settings.transcriberEnabled === false) {
     return { ok: false, error: 'Audio transcriber is turned off in Settings.' };
   }
-  // Free-tier weekly dictation limit (resets automatically each ISO week).
-  if (!isUnlimited() && weeklyAudioWords() >= FREE_LIMITS.audioWordsPerWeek) {
+  // Free-tier weekly dictation limit (per-account; resets each ISO week).
+  if (!isUnlimited() && cloudAudioWords() >= FREE_LIMITS.audioWordsPerWeek) {
     return {
       ok: false,
       limitReached: 'audio',
@@ -1083,6 +1229,14 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
       stats.weekly[wk] = (stats.weekly[wk] || 0) + n;
       stats.monthly[mo] = (stats.monthly[mo] || 0) + n;
       store.set('transcriberStats', stats);
+
+      // Per-account: optimistic bump + route the count to the (authed) main
+      // window so it writes to the user's cloud profile. This covers ALL
+      // dictation — popup mic AND the Fn/PTT bar — exactly once.
+      bumpCloudAudioWords(n);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('usage:audio-words', n);
+      }
     }
 
     return { ok: true, text };

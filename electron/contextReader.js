@@ -238,17 +238,19 @@ async function readWindows() {
     $h = [Win]::GetForegroundWindow()
     $sb = New-Object System.Text.StringBuilder 512
     [Win]::GetWindowText($h, $sb, 512) | Out-Null
-    $pid = 0
-    [Win]::GetWindowThreadProcessId($h, [ref]$pid) | Out-Null
-    $p = Get-Process -Id $pid
-    "$($p.ProcessName)||$($sb.ToString())||$($h.ToInt64())"
+    $procId = 0
+    [Win]::GetWindowThreadProcessId($h, [ref]$procId) | Out-Null
+    $p = Get-Process -Id $procId
+    "$($p.ProcessName)||$($sb.ToString())||$($h.ToInt64())||$procId"
   `;
+  // NOTE: must NOT use $pid as a variable name — it's a read-only PowerShell
+  // automatic variable (this process's own PID), which previously made every
+  // foreground app resolve to "powershell" and broke site/app detection.
   const { stdout } = await pexec(`powershell -NoProfile -Command "${ps.replace(/"/g, '\\"')}"`);
-  // The third field is the foreground window handle (HWND). We keep it so the
-  // auto-fill step can restore focus to *this* window before pasting — after the
-  // popup hides, Windows won't reliably hand focus back on its own.
-  const [app, title, hwnd] = stdout.trim().split('||');
-  return { activeApp: app || 'Unknown', windowTitle: title || '', url: '', hwnd: hwnd || '' };
+  // Fields: ProcessName || WindowTitle || HWND || ProcessId. HWND + PID let the
+  // auto-fill step re-focus the original window before pasting.
+  const [app, title, hwnd, pid] = stdout.trim().split('||');
+  return { activeApp: app || 'Unknown', windowTitle: title || '', url: '', hwnd: hwnd || '', pid: pid || '' };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -333,8 +335,9 @@ export async function readContext(mousePosition) {
     windowTitle: info.windowTitle,
     fieldType,
     cursor: mousePosition,
-    // Foreground window handle (Windows only) — used by autoFill to restore
-    // focus to the right window before pasting. null/undefined elsewhere.
+    // Foreground window handle + process id (Windows only) — used by autoFill
+    // to re-focus the right window before pasting. null/undefined elsewhere.
     hwnd: info.hwnd || null,
+    pid: info.pid || null,
   };
 }

@@ -31,6 +31,12 @@ service cloud.firestore {
 
       // Only admin can delete a user record.
       allow delete: if isAdmin();
+
+      // Per-user templates, synced across the user's devices. Owner-only
+      // (admin may also read for support).
+      match /templates/{templateId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
     }
 
     // Invite records created from the admin panel. Admin-only — invited users

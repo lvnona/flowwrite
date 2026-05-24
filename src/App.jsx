@@ -24,6 +24,7 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { useAuth } from './hooks/useAuth.js';
 import { getFirebaseFirestore } from './utils/firebase.js';
 import { isConfigured } from './utils/firebaseConfig.js';
+import { thisWeekKey, incrementAudioWords } from './utils/usageTracking.js';
 
 // Shown in the popup window while Firebase is initialising auth state.
 function PopupLoading() {
@@ -74,14 +75,31 @@ export default function App() {
   const [route, setRoute] = useState(readRoute);
   const { user, profile, loading } = useAuth();
 
-  // Push the signed-in user's plan into the main process so it can enforce the
-  // free-tier weekly limits (generations + dictation). Skip the dictation
-  // window (no auth context) so it never overwrites the real plan with 'free'.
+  // Push the signed-in user's plan + this week's PER-ACCOUNT usage into the main
+  // process so it can enforce the free-tier weekly limits across devices. Skip
+  // the dictation window (no auth context).
   useEffect(() => {
     if (route === 'dictation') return;
-    if (!profile?.plan) return;
-    window.flowwrite?.setPlan?.(profile.plan);
-  }, [profile?.plan, route]);
+    if (!profile) return;
+    if (profile.plan) window.flowwrite?.setPlan?.(profile.plan);
+    const wk = thisWeekKey();
+    window.flowwrite?.setUsage?.({
+      generationsThisWeek: profile.usageWeekly?.[wk] || 0,
+      audioWordsThisWeek: profile.audioWordsWeekly?.[wk] || 0,
+    });
+  }, [profile, route]);
+
+  // The main process routes each transcription's word count to the main window
+  // (the persistent, authed renderer) so it lands in the user's cloud profile —
+  // covering popup-mic AND the Fn/PTT bar. The event is only sent to the main
+  // window, so this fires once even though the popup also mounts App.
+  useEffect(() => {
+    if (route === 'dictation') return undefined;
+    const off = window.flowwrite?.onAudioWords?.((n) => {
+      try { incrementAudioWords?.(n)?.catch?.(() => {}); } catch { /* ignore */ }
+    });
+    return () => off?.();
+  }, [route]);
 
   useEffect(() => {
     const handler = () => setRoute(readRoute());

@@ -680,7 +680,7 @@ function eventToAccelerator(e) {
 function humanizeHotkey(value, isMac) {
   if (value === 'Off') return 'Off';
   if (value === 'Fn') return 'Fn (hold)';
-  if (!value) return isMac ? 'Fn (hold)' : 'Ctrl + Shift + Space';
+  if (!value) return isMac ? 'Fn (hold)' : 'Right Ctrl (hold)';
   return value
     .replace('CommandOrControl', isMac ? '⌘' : 'Ctrl')
     .replace('Command', '⌘')
@@ -711,9 +711,11 @@ function DictationShortcut({ value, onChange }) {
   const hint =
     value === 'Fn' || (value === '' && isMac)
       ? 'Hold Fn / 🌐 to talk, release to insert (macOS). Tip: set System Settings → Keyboard → Press 🌐 to → Do Nothing.'
-      : value === 'Off'
-        ? 'No global dictation shortcut — the popup 🎤 button still works.'
-        : 'Tap to start dictating, tap again to stop. Combinations and single keys (e.g. F-keys) work; a bare modifier alone isn\'t supported except Fn.';
+      : value === '' && !isMac
+        ? 'Hold Right Ctrl to talk, release to insert (Windows push-to-talk). Quick taps are ignored.'
+        : value === 'Off'
+          ? 'No global dictation shortcut — the popup 🎤 button still works.'
+          : 'Tap to start dictating, tap again to stop. Combinations and single keys (e.g. F-keys) work; a bare modifier alone isn\'t supported except Fn / Right Ctrl.';
 
   return (
     <div className="flex flex-col gap-2">

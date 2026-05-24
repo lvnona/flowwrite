@@ -35,22 +35,19 @@ export default function Dashboard() {
   const { entries } = useHistory();
   const { user, profile } = useAuth();
 
-  // Transcriber word counts come from the main process (electron-store), which
-  // counts EVERY dictation source regardless of auth — see main.js.
-  const [transcriber, setTranscriber] = useState({ words: 0, weekly: {}, monthly: {} });
   const [version, setVersion] = useState('');
-  // This week's usage vs the active plan's limits (from the main process).
-  const [usage, setUsage] = useState(null);
 
   useEffect(() => {
-    window.flowwrite?.getTranscriberStats?.().then((s) => {
-      if (s) setTranscriber({ words: 0, weekly: {}, monthly: {}, ...s });
-    });
     window.flowwrite?.getAppVersion?.().then((v) => { if (v) setVersion(v); });
-    window.flowwrite?.getUsage?.().then((u) => { if (u) setUsage(u); });
   }, []);
 
   const isPro = (profile?.plan === 'pro' || profile?.plan === 'team');
+
+  // Per-account usage this week (cloud) — matches what the limits enforce.
+  const limitUsage = useMemo(() => ({
+    generations: profile?.usageWeekly?.[thisWeekKey()] || 0,
+    audioWords: profile?.audioWordsWeekly?.[thisWeekKey()] || 0,
+  }), [profile]);
 
   function openUpgrade() {
     window.flowwrite?.openExternal?.(checkoutUrl(user?.uid, user?.email));
@@ -70,12 +67,13 @@ export default function Dashboard() {
     return { monthly, weekly, allTime, plan, limit };
   }, [profile]);
 
-  // Voice-dictation words: this week / this month / all-time.
+  // Voice-dictation words — PER-ACCOUNT (cloud), so it matches the plan-panel
+  // figure and is the same total on every device.
   const words = useMemo(() => ({
-    week:  transcriber?.weekly?.[thisWeekKey()] || 0,
-    month: transcriber?.monthly?.[thisMonthKey()] || 0,
-    all:   transcriber?.words || 0,
-  }), [transcriber]);
+    week:  profile?.audioWordsWeekly?.[thisWeekKey()] || 0,
+    month: profile?.audioWords?.[thisMonthKey()] || 0,
+    all:   profile?.allTimeAudioWords || 0,
+  }), [profile]);
 
   const stats = useMemo(() => {
     const now = Date.now();
@@ -114,18 +112,10 @@ export default function Dashboard() {
           )}
         </div>
 
-        {!isPro && usage && (
+        {!isPro && (
           <div className="grid grid-cols-2 gap-4 mt-4">
-            <UsageBar
-              label="AI generations"
-              used={usage.generations?.used || 0}
-              limit={usage.generations?.limit ?? 50}
-            />
-            <UsageBar
-              label="Dictated words"
-              used={usage.audioWords?.used || 0}
-              limit={usage.audioWords?.limit ?? 2500}
-            />
+            <UsageBar label="AI generations" used={limitUsage.generations} limit={50} />
+            <UsageBar label="Dictated words" used={limitUsage.audioWords} limit={2500} />
           </div>
         )}
       </div>
@@ -135,12 +125,13 @@ export default function Dashboard() {
         Popup requests
       </h3>
       <div className="grid grid-cols-3 gap-3 mb-5">
-        <StatCard label="This week" value={cloudUsage.weekly} accent />
         <StatCard
-          label={`This month (${cloudUsage.plan})`}
-          value={cloudUsage.monthly}
-          secondary={cloudUsage.limit ? `of ${cloudUsage.limit}` : 'unlimited'}
+          label="This week"
+          value={cloudUsage.weekly}
+          secondary={isPro ? 'unlimited' : 'of 50'}
+          accent
         />
+        <StatCard label={`This month (${cloudUsage.plan})`} value={cloudUsage.monthly} />
         <StatCard label="All time" value={cloudUsage.allTime} />
       </div>
 

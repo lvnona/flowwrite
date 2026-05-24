@@ -21,7 +21,6 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMicStream } from '../utils/mic.js';
-import { incrementAudioWords } from '../utils/usageTracking.js';
 
 function pickMimeType() {
   const candidates = [
@@ -129,14 +128,8 @@ export function useDictation() {
         return null;
       }
       const text = (res.text || '').trim();
-      // Track words in Firestore — fully optional, never allowed to throw
-      // into the surrounding catch (which would discard the transcribed text).
-      try {
-        if (text) {
-          const words = text.split(/\s+/).filter(Boolean).length;
-          incrementAudioWords?.(words)?.catch?.(() => {});
-        }
-      } catch { /* ignore */ }
+      // (Cloud word-count is recorded by the main process for ALL dictation
+      // sources, so we don't increment here — avoids double counting.)
       return text;
     } catch (err) {
       setError(err?.message || String(err));

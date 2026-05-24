@@ -10,7 +10,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { getMicStream } from '../utils/mic.js';
-import { incrementAudioWords } from '../utils/usageTracking.js';
 
 const NUM_BARS = 5;
 
@@ -156,13 +155,8 @@ export default function DictationBar() {
         setState('idle');
         return;
       }
-      // Track words in Firestore for admin cost analysis — fully optional,
-      // never allowed to interrupt insertion even if the import is not yet
-      // resolved (HMR, first load, etc.).
-      try {
-        const wordCount = text.split(/\s+/).filter(Boolean).length;
-        incrementAudioWords?.(wordCount)?.catch?.(() => {});
-      } catch { /* ignore */ }
+      // (Cloud word-count is recorded by the main process — see transcribe-audio
+      // → 'usage:audio-words' — so the dictation window doesn't track it here.)
       const ins = await window.flowwrite?.dictationInsert?.(text);
       if (ins?.tier === 'clipboard-only') {
         // Couldn't type into the app (Accessibility not granted) — the text is

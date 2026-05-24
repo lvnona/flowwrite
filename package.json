@@ -1,6 +1,6 @@
 {
   "name": "flowwrite",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "AI writing assistant that lives in your system tray and helps fill any text field with Claude-generated content.",
   "main": "electron/main.js",
   "type": "module",
@@ -43,6 +43,9 @@
     "appId": "com.flowwrite.app",
     "productName": "FlowWrite",
     "afterSign": "build/notarize.cjs",
+    "publish": [
+      { "provider": "github", "owner": "lvnona", "repo": "flowwrite" }
+    ],
     "files": [
       "electron/**/*",
       "dist/index.html",
@@ -59,6 +62,7 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "icon": "public/icons/app-icon.png",
+      "target": ["dmg", "zip"],
       "artifactName": "FlowWrite-mac.${ext}",
       "x64ArchFiles": "fn-monitor",
       "extendInfo": {
