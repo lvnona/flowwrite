@@ -12,6 +12,16 @@ RewriteEngine On
 RewriteCond %{HTTPS} !=on
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
 
+# ── Pass the Authorization header through to PHP ─────────────────────────────
+# The mobile proxy (mobile-generate.php / mobile-transcribe.php) authenticates
+# via "Authorization: Bearer <Firebase ID token>". Some Apache + PHP-FPM/CGI
+# configurations strip that header before PHP sees it; re-expose it here.
+<IfModule mod_setenvif.c>
+  SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
+</IfModule>
+RewriteCond %{HTTP:Authorization} .
+RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
 # ── Pretty URL for the admin panel ───────────────────────────────────────────
 RewriteRule ^admin/?$ admin.html [L]
 

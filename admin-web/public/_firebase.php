@@ -24,6 +24,15 @@ function fw_http($method, $url, $body = null, $headers = []) {
 
 // Returns [accessToken, projectId].
 function fw_google_token($saPath) {
+  // Per-request token cache. A single mobile-proxy request reads config/apiKeys,
+  // the user doc, and commits a usage increment — each of which would otherwise
+  // mint a fresh service-account token. The token is valid for an hour, so
+  // caching it for the life of the PHP request collapses three token exchanges
+  // into one. (Shared with the Stripe endpoints — only ever a speedup.)
+  static $cache = [];
+  if (isset($cache[$saPath]) && $cache[$saPath]['exp'] > time() + 60) {
+    return [$cache[$saPath]['token'], $cache[$saPath]['project']];
+  }
   $sa = json_decode(file_get_contents($saPath), true);
   if (!$sa || empty($sa['private_key'])) {
     throw new Exception('Bad service account file');
@@ -52,6 +61,11 @@ function fw_google_token($saPath) {
   );
   $j = json_decode($res, true);
   if (empty($j['access_token'])) throw new Exception('Token exchange failed: ' . $res);
+  $cache[$saPath] = [
+    'token'   => $j['access_token'],
+    'project' => $sa['project_id'],
+    'exp'     => $now + 3600,
+  ];
   return [$j['access_token'], $sa['project_id']];
 }
 
@@ -143,5 +157,54 @@ function fw_patch_user($cfg, $uid, $fields) {
     "Authorization: Bearer $token",
     'Content-Type: application/json',
   ]);
+  return [$code, $res];
+}
+
+// Escape a Firestore field path so map keys that aren't simple identifiers are
+// treated as a single key, not a nested path. A key like "2026-W21" starts with
+// a digit and contains a hyphen, so "usageWeekly.2026-W21" must become
+// "usageWeekly.`2026-W21`" or Firestore reads it as usageWeekly → 2026 → ...
+function fw_escape_field_path($path) {
+  $out = [];
+  foreach (explode('.', $path) as $seg) {
+    if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $seg)) {
+      $out[] = $seg;
+    } else {
+      $out[] = '`' . str_replace(['\\', '`'], ['\\\\', '\\`'], $seg) . '`';
+    }
+  }
+  return implode('.', $out);
+}
+
+// Atomically increment integer fields on users/{uid} using the Firestore commit
+// endpoint (server-side FieldValue.increment — no read-modify-write race).
+// $incs is an assoc of fieldPath => integer delta, e.g.
+//   [ 'usageWeekly.2026-W21' => 1, 'allTimeUsage' => 1 ]
+// Map-key segments are auto-escaped. The doc must already exist (callers
+// lazy-create it on first sign-in). Returns [httpCode, rawBody].
+function fw_increment_user($cfg, $uid, $incs) {
+  list($token, $project) = fw_google_token($cfg['service_account_path']);
+  $docName = "projects/$project/databases/(default)/documents/users/$uid";
+  $transforms = [];
+  foreach ($incs as $path => $delta) {
+    $transforms[] = [
+      'fieldPath' => fw_escape_field_path($path),
+      'increment' => ['integerValue' => (string)(int)$delta],
+    ];
+  }
+  $body = json_encode([
+    'writes' => [[
+      'transform' => [
+        'document'        => $docName,
+        'fieldTransforms' => $transforms,
+      ],
+    ]],
+  ]);
+  $url = "https://firestore.googleapis.com/v1/projects/$project/databases/(default)/documents:commit";
+  list($code, $res) = fw_http('POST', $url, $body, [
+    "Authorization: Bearer $token",
+    'Content-Type: application/json',
+  ]);
+  if ($code !== 200) throw new Exception("Increment failed ($code): $res");
   return [$code, $res];
 }
