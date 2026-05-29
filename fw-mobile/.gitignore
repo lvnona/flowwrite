@@ -1,0 +1,20 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+# Ignore Gradle build output at any module level (root, app/, …)
+build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Release signing — NEVER commit these
+app/keystore.properties
+*.jks
+*.keystore
+
+# Keep the placeholder so the project builds; replace with the real file from
+# the Firebase console (do NOT commit the real one if it contains secrets).
+# app/google-services.json

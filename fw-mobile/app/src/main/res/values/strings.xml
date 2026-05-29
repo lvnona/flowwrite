@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">FlowWrite</string>
+
+    <!-- Accessibility service (FwAccessibilityService — task 7) -->
+    <string name="accessibility_service_label">FlowWrite Dictation</string>
+    <string name="accessibility_service_description">Lets FlowWrite place your dictated text into the field you\'re typing in. FlowWrite reads the focused text field only to insert your words — it does not collect, store, or share your screen content.</string>
+
+    <!-- Notification channel shown while the mic is recording (task 8) -->
+    <string name="notif_channel_mic_name">Recording</string>
+    <string name="notif_channel_mic_desc">Shown while FlowWrite is recording your voice</string>
+    <string name="notif_recording">FlowWrite is listening…</string>
+    <string name="notif_processing">Transcribing…</string>
+
+    <!-- Notification channel for the floating bubble foreground service (task 6) -->
+    <string name="notif_channel_bubble_name">Floating Bubble</string>
+    <string name="notif_channel_bubble_desc">Keeps the FlowWrite bubble visible over other apps</string>
+    <string name="notif_bubble_running">FlowWrite is active</string>
+</resources>

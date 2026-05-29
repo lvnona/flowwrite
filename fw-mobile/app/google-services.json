@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "276442606854",
+    "project_id": "flowwrite-3ccd2",
+    "storage_bucket": "flowwrite-3ccd2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:276442606854:android:90333a917913601f06c287",
+        "android_client_info": {
+          "package_name": "ca.u11.flowwrite"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "276442606854-fn762clt4grlclbns2r7lcs9a1qu9ukh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "ca.u11.flowwrite",
+            "certificate_hash": "6fe738c3186dde23c9da5d1ac00a34166ef309a0"
+          }
+        },
+        {
+          "client_id": "276442606854-17qqhb2oq9g4qkmi0n6q1ddscnb3vumg.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCRUUpk7qIJodxp_XWvGFKaVrAkEvw6Nv8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "276442606854-17qqhb2oq9g4qkmi0n6q1ddscnb3vumg.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

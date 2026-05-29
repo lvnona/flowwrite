@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Floating bubble drawn over other apps -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Microphone capture for dictation -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Foreground services -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Android 10+ microphone foreground service type -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Android 14+ special-use foreground service type (bubble overlay) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Foreground-service notification on Android 13+ -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Re-launch the bubble after a device reboot -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <application
+        android:name=".FlowWriteApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FlowWrite">
+
+        <!-- ── Main activity ─────────────────────────────────────────────── -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.FlowWrite">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- ── Generate activity (transparent, launched from bubble long-press) -->
+        <!--
+            Theme.FlowWrite.Generate is a transparent/dialog theme so only the
+            ModalBottomSheet is visible; the rest stays dimmed.
+        -->
+        <activity
+            android:name=".GenerateActivity"
+            android:exported="false"
+            android:theme="@style/Theme.FlowWrite.Generate"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:excludeFromRecents="true" />
+
+        <!-- ── Floating bubble overlay service (task 6) ──────────────────── -->
+        <!--
+            foregroundServiceType="specialUse" is required on Android 14+ for
+            services that don't fit a more specific category.  The subtype
+            property below satisfies the Play Store review requirement.
+        -->
+        <service
+            android:name=".service.BubbleService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Floating dictation bubble drawn over other apps" />
+        </service>
+
+        <!-- ── Microphone / transcription service (task 8) ───────────────── -->
+        <service
+            android:name=".service.MicService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <!-- ── Boot receiver — re-launches the bubble after reboot ───────── -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- ── Accessibility service (task 7) ────────────────────────────── -->
+        <!--
+            The user must enable this manually in Settings → Accessibility.
+            It receives TYPE_VIEW_FOCUSED events only — no screen reading.
+        -->
+        <service
+            android:name=".service.FwAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+</manifest>

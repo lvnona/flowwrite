@@ -1,0 +1,25 @@
+<resources>
+    <!-- Dark splash/window theme so there is no white flash before Compose draws. -->
+    <style name="Theme.FlowWrite" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/fw_navy</item>
+        <item name="android:statusBarColor">@color/fw_navy</item>
+        <item name="android:navigationBarColor">@color/fw_navy</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!--
+        Transparent theme for GenerateActivity.
+        The window itself is invisible — only the ModalBottomSheet content is shown.
+        Parent must be Material so Compose theming still works.
+    -->
+    <style name="Theme.FlowWrite.Generate" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">false</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.5</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

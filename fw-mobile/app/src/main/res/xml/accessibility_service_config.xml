@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Configuration for FwAccessibilityService.
+
+  Events subscribed:
+    typeViewFocused        — track which editable field has focus so we know
+                             where to insert text when transcription finishes.
+    typeWindowStateChanged — refresh the focused-node reference after app
+                             switches (e.g. user switches to a new activity).
+
+  canRetrieveWindowContent = true is required to call
+  rootInActiveWindow.findFocus() as a fallback when the focus event fires
+  before we've stored a node reference.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeViewClicked|typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagRetrieveInteractiveWindows|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="" />
