@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // Centralised API keys (admin-managed) pushed from the renderer to main.
   setApiKeys: (keys) => ipcRenderer.invoke('set-api-keys', keys),
 
+  // Admin-managed free-plan weekly limits (read from Firestore, pushed here).
+  setLimits: (l) => ipcRenderer.invoke('set-limits', l),
+
   // History
   getHistory: () => ipcRenderer.invoke('get-history'),
   addHistory: (entry) => ipcRenderer.invoke('add-history', entry),

@@ -154,6 +154,31 @@ export default function App() {
     return () => unsub();
   }, [user, route]);
 
+  // Admin-managed free-plan weekly limits (config/limits). Same pattern as
+  // apiKeys: subscribe in main + popup, push to the main process so its
+  // FREE_LIMITS check uses live values without needing a new release.
+  useEffect(() => {
+    if (!user || !isConfigured()) return undefined;
+    if (route === 'dictation') return undefined;
+    let unsub = () => {};
+    try {
+      const db = getFirebaseFirestore();
+      unsub = onSnapshot(
+        doc(db, 'config', 'limits'),
+        (snap) => {
+          if (!snap.exists()) return;
+          const d = snap.data();
+          window.flowwrite?.setLimits?.({
+            freeWeeklyGenerations: d.freeWeeklyGenerations,
+            freeWeeklyAudioWords:  d.freeWeeklyAudioWords,
+          });
+        },
+        () => {},
+      );
+    } catch { /* ignore */ }
+    return () => unsub();
+  }, [user, route]);
+
   // Voice dictation bar is a system-wide utility driven by the Fn key. It only
   // needs the OpenAI key (held in the main process), not Firebase/sign-in, so
   // render it before any auth gating.

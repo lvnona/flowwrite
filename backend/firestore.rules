@@ -68,6 +68,14 @@ service cloud.firestore {
       allow write: if isSuperAdmin();
     }
 
+    // Free-plan weekly limits (popup generations + dictated words). Read by
+    // every signed-in user so the app can enforce + display them; admin-only
+    // write so customers can't loosen their own limits.
+    match /config/limits {
+      allow read:  if request.auth != null;
+      allow write: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

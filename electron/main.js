@@ -126,6 +126,10 @@ function isoWeekKey(d = new Date()) {
 // Free tier is metered per ISO week (reset is automatic — a new week is a new
 // key starting at 0). Pro/team are unlimited. Enforced here in the main process
 // so every path (popup generate, popup mic, Fn dictation bar) is covered.
+// Mutable so the renderer can push admin-managed limits from Firestore
+// (config/limits) at runtime. Defaults match the historical hardcoded values
+// and apply until the renderer pushes a value, or as a fallback if Firestore
+// is unreachable.
 const FREE_LIMITS = { generationsPerWeek: 50, audioWordsPerWeek: 2500 };
 
 function currentPlan() { return store.get('membership')?.plan || 'free'; }
@@ -707,6 +711,17 @@ ipcMain.handle('set-api-keys', (_e, keys = {}) => {
     openai:           str(keys.openai,           prev.openai),
   });
   return { ok: true };
+});
+
+// Admin-managed free-plan weekly limits (pushed from the renderer, which reads
+// the live values from Firestore config/limits). Falsy / non-positive values
+// are ignored so a bad config can't accidentally zero everyone out.
+ipcMain.handle('set-limits', (_e, l = {}) => {
+  const g = Number(l.freeWeeklyGenerations);
+  const w = Number(l.freeWeeklyAudioWords);
+  if (Number.isFinite(g) && g >= 0) FREE_LIMITS.generationsPerWeek = g;
+  if (Number.isFinite(w) && w >= 0) FREE_LIMITS.audioWordsPerWeek  = w;
+  return { ok: true, ...FREE_LIMITS };
 });
 
 // App version (shown in the Dashboard footer so users can track which build

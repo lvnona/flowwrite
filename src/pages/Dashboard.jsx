@@ -5,11 +5,17 @@
 // in Settings → Templates.
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { useHistory } from '../hooks/useHistory.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { thisWeekKey } from '../utils/usageTracking.js';
 import { checkoutUrl, portalUrl } from '../utils/billing.js';
+import { getFirebaseFirestore } from '../utils/firebase.js';
+import { isConfigured } from '../utils/firebaseConfig.js';
 import NavBar from '../components/NavBar.jsx';
+
+// Fallback if Firestore is unreachable / config/limits missing.
+const DEFAULT_LIMITS = { freeWeeklyGenerations: 50, freeWeeklyAudioWords: 2500 };
 
 function startOfDay(t = Date.now()) {
   const d = new Date(t);
@@ -36,9 +42,30 @@ export default function Dashboard() {
   const { user, profile } = useAuth();
 
   const [version, setVersion] = useState('');
+  const [limits, setLimits] = useState(DEFAULT_LIMITS);
 
   useEffect(() => {
     window.flowwrite?.getAppVersion?.().then((v) => { if (v) setVersion(v); });
+  }, []);
+
+  // Live free-plan limits from Firestore (admin-managed). Falls back to the
+  // historical 50 / 2 500 if the doc hasn't been set.
+  useEffect(() => {
+    if (!isConfigured()) return undefined;
+    try {
+      return onSnapshot(
+        doc(getFirebaseFirestore(), 'config', 'limits'),
+        (snap) => {
+          if (!snap.exists()) { setLimits(DEFAULT_LIMITS); return; }
+          const d = snap.data();
+          setLimits({
+            freeWeeklyGenerations: Number(d.freeWeeklyGenerations) || DEFAULT_LIMITS.freeWeeklyGenerations,
+            freeWeeklyAudioWords:  Number(d.freeWeeklyAudioWords)  || DEFAULT_LIMITS.freeWeeklyAudioWords,
+          });
+        },
+        () => {},
+      );
+    } catch { return undefined; }
   }, []);
 
   const isPro = (profile?.plan === 'pro' || profile?.plan === 'team');
@@ -114,8 +141,8 @@ export default function Dashboard() {
 
         {!isPro && (
           <div className="grid grid-cols-2 gap-4 mt-4">
-            <UsageBar label="AI generations" used={limitUsage.generations} limit={50} />
-            <UsageBar label="Dictated words" used={limitUsage.audioWords} limit={2500} />
+            <UsageBar label="AI generations" used={limitUsage.generations} limit={limits.freeWeeklyGenerations} />
+            <UsageBar label="Dictated words" used={limitUsage.audioWords} limit={limits.freeWeeklyAudioWords} />
           </div>
         )}
       </div>
@@ -128,7 +155,7 @@ export default function Dashboard() {
         <StatCard
           label="This week"
           value={cloudUsage.weekly}
-          secondary={isPro ? 'unlimited' : 'of 50'}
+          secondary={isPro ? 'unlimited' : `of ${limits.freeWeeklyGenerations.toLocaleString()}`}
           accent
         />
         <StatCard label={`This month (${cloudUsage.plan})`} value={cloudUsage.monthly} />

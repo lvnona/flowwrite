@@ -99,6 +99,7 @@ export default function AdminPanel({ user }) {
     resetFreeWeeklyUsage,
     apiKeys, saveApiKeys,
     billing, saveBilling,
+    limits, saveLimits,
   } = useAdmin(user);
 
   const [tab, setTab]           = useState('users'); // 'users' | 'subscribers' | 'apikeys' | 'config'
@@ -308,6 +309,7 @@ export default function AdminPanel({ user }) {
         {tab === 'config' && (
           <ConfigSection
             billing={billing} saveBilling={saveBilling}
+            limits={limits} saveLimits={saveLimits}
             isSuperAdmin={isSuperAdmin} users={users}
             adminUids={adminUids} addAdmin={addAdmin} removeAdmin={removeAdmin}
           />
@@ -846,9 +848,78 @@ function AdminsManager({ users, adminUids, addAdmin, removeAdmin }) {
   );
 }
 
+// ── Free-plan limits card (admin-managed) ─────────────────────────────────────
+function LimitsCard({ limits, saveLimits }) {
+  const [gens, setGens]   = useState(limits.freeWeeklyGenerations);
+  const [words, setWords] = useState(limits.freeWeeklyAudioWords);
+  const [busy, setBusy]   = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr]     = useState('');
+
+  // Sync local draft when Firestore data arrives / changes.
+  useEffect(() => {
+    setGens(limits.freeWeeklyGenerations);
+    setWords(limits.freeWeeklyAudioWords);
+  }, [limits.freeWeeklyGenerations, limits.freeWeeklyAudioWords]);
+
+  async function handleSave(e) {
+    e.preventDefault();
+    setErr(''); setBusy(true);
+    try {
+      await saveLimits({ freeWeeklyGenerations: gens, freeWeeklyAudioWords: words });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e2) {
+      setErr(e2.message || 'Failed to save limits.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const changed = gens !== limits.freeWeeklyGenerations || words !== limits.freeWeeklyAudioWords;
+
+  return (
+    <form onSubmit={handleSave} className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 mb-6">
+      <div className="text-[10px] uppercase tracking-wider text-white/30 mb-1">Free-plan weekly limits</div>
+      <p className="text-[11px] text-white/35 mb-4 leading-relaxed">
+        How much free users get each week before the Pro paywall kicks in. The app
+        and the desktop both read these live — no release needed.
+      </p>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-wider text-white/40">AI generations / week</span>
+          <input type="number" min="0" value={gens}
+            onChange={(e) => setGens(parseInt(e.target.value, 10) || 0)}
+            className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm
+                       focus:outline-none focus:border-violet-400/50 transition" />
+        </label>
+        <label className="block">
+          <span className="text-[10px] uppercase tracking-wider text-white/40">Dictated words / week</span>
+          <input type="number" min="0" value={words}
+            onChange={(e) => setWords(parseInt(e.target.value, 10) || 0)}
+            className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm
+                       focus:outline-none focus:border-violet-400/50 transition" />
+        </label>
+      </div>
+      {err && (
+        <div className="text-xs text-red-400 bg-red-500/10 border border-red-400/20 rounded-lg px-3 py-2 mb-2">{err}</div>
+      )}
+      <div className="flex items-center gap-3">
+        <button type="submit" disabled={busy || !changed}
+          className="px-4 py-2 rounded-xl bg-violet-500/90 hover:bg-violet-500 text-white
+                     text-sm font-medium transition disabled:opacity-50">
+          {busy ? 'Saving…' : 'Save limits'}
+        </button>
+        {saved && <span className="text-xs text-emerald-400">✓ Saved — live immediately</span>}
+        <span className="ml-auto text-[11px] text-white/30">Defaults: 50 / 2 500</span>
+      </div>
+    </form>
+  );
+}
+
 // ── Config section (Stripe + email + URLs, stored in Firestore) ───────────────
 
-function ConfigSection({ billing, saveBilling, isSuperAdmin, users, adminUids, addAdmin, removeAdmin }) {
+function ConfigSection({ billing, saveBilling, limits, saveLimits, isSuperAdmin, users, adminUids, addAdmin, removeAdmin }) {
   const [draft, setDraft] = useState(billing);
   const [populated, setPopulated] = useState(false);
   const [busy, setBusy]   = useState(false);
@@ -895,6 +966,9 @@ function ConfigSection({ billing, saveBilling, isSuperAdmin, users, adminUids, a
       {isSuperAdmin && (
         <AdminsManager users={users} adminUids={adminUids} addAdmin={addAdmin} removeAdmin={removeAdmin} />
       )}
+
+      {/* Free-plan weekly limits */}
+      <LimitsCard limits={limits} saveLimits={saveLimits} />
 
       <form onSubmit={handleSave} className="flex flex-col gap-5">
 

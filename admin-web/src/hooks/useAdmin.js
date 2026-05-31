@@ -19,6 +19,13 @@ import { firestore, auth } from '../firebase.js';
 const API_KEYS_REF = () => doc(firestore, 'config', 'apiKeys');
 // Server-side billing + email config (Stripe, SMTP, URLs). Admin-only.
 const BILLING_REF = () => doc(firestore, 'config', 'billing');
+// Free-plan weekly limits — readable by every signed-in user.
+const LIMITS_REF = () => doc(firestore, 'config', 'limits');
+
+const LIMITS_DEFAULTS = {
+  freeWeeklyGenerations: 50,
+  freeWeeklyAudioWords: 2500,
+};
 
 const BILLING_DEFAULTS = {
   stripe_secret_key: '',
@@ -72,6 +79,7 @@ export function useAdmin(user) {
     openai:           '',
   });
   const [billing, setBilling] = useState(BILLING_DEFAULTS);
+  const [limits, setLimits] = useState(LIMITS_DEFAULTS);
   const [adminUids, setAdminUids] = useState([]);
   const [adminsLoaded, setAdminsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -356,6 +364,29 @@ export function useAdmin(user) {
     setBilling(out);
   }, []);
 
+  // ── Free-plan weekly limits ─────────────────────────────────────────────
+
+  const fetchLimits = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const snap = await getDoc(LIMITS_REF());
+      if (snap.exists()) setLimits({ ...LIMITS_DEFAULTS, ...snap.data() });
+    } catch { /* non-fatal */ }
+  }, [isAdmin]);
+
+  useEffect(() => { fetchLimits(); }, [fetchLimits]);
+
+  const saveLimits = useCallback(async (next) => {
+    const out = {
+      freeWeeklyGenerations: Math.max(0, parseInt(next.freeWeeklyGenerations, 10) || 0),
+      freeWeeklyAudioWords:  Math.max(0, parseInt(next.freeWeeklyAudioWords,  10) || 0),
+    };
+    await setDoc(LIMITS_REF(), {
+      ...out, updatedAt: serverTimestamp(), updatedBy: auth.currentUser?.uid || null,
+    }, { merge: true });
+    setLimits(out);
+  }, []);
+
   return {
     users, loading, error, isAdmin, isSuperAdmin, adminResolved,
     adminUids, addAdmin, removeAdmin,
@@ -365,5 +396,6 @@ export function useAdmin(user) {
     invites, inviteUser, resendInvite, deleteInvite,
     apiKeys, saveApiKeys,
     billing, saveBilling,
+    limits, saveLimits,
   };
 }
