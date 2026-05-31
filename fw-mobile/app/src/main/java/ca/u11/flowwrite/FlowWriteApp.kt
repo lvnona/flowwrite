@@ -7,6 +7,7 @@ import android.content.Context
 import ca.u11.flowwrite.auth.AuthRepository
 import ca.u11.flowwrite.data.ApiClient
 import ca.u11.flowwrite.data.ApiKeyRepository
+import ca.u11.flowwrite.data.LimitsRepository
 import ca.u11.flowwrite.data.ProfileRepository
 import ca.u11.flowwrite.data.TemplateRepository
 
@@ -25,12 +26,14 @@ class FlowWriteApp : Application() {
     val api          by lazy { ApiClient(apiKeyRepo) }
     val profileRepo  by lazy { ProfileRepository() }
     val templateRepo by lazy { TemplateRepository() }
+    val limitsRepo   by lazy { LimitsRepository() }
 
     override fun onCreate() {
         super.onCreate()
-        // Start listening to config/apiKeys immediately — same as the Electron
-        // app's onSnapshot in App.jsx. Keys are ready before the first API call.
+        // Start listening to config docs immediately — same as the Electron
+        // app's onSnapshot in App.jsx. Both are ready before the first API call.
         apiKeyRepo.startListening()
+        limitsRepo.startListening()
         createNotificationChannels()
     }
 

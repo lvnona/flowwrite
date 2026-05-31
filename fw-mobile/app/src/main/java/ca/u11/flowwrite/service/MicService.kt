@@ -41,9 +41,6 @@ class MicService : LifecycleService() {
         const val ACTION_STOP  = "ca.u11.flowwrite.MIC_STOP"
         private const val NOTIF_ID = 2
 
-        /** Free-tier weekly audio-word cap — mirrors Electron's FREE_LIMITS */
-        private const val FREE_AUDIO_WORDS = 2500
-
         fun startIntent(context: Context) =
             Intent(context, MicService::class.java).apply { action = ACTION_START }
 
@@ -119,9 +116,11 @@ class MicService : LifecycleService() {
                 // ── Quota check ──────────────────────────────────────────────
                 val profile = withContext(Dispatchers.IO) { app.profileRepo.getProfile(uid) }
                 val isFree  = profile?.plan != "pro"
-                if (isFree && (profile?.audioWordsThisWeek ?: 0) >= FREE_AUDIO_WORDS) {
+                // Live, admin-managed limit from config/limits (defaults if not yet loaded).
+                val audioLimit = app.limitsRepo.limits.value.audioWords
+                if (isFree && (profile?.audioWordsThisWeek ?: 0) >= audioLimit) {
                     RecordingBus.emitError(
-                        "Weekly audio limit reached ($FREE_AUDIO_WORDS words/week). Upgrade to Pro."
+                        "Weekly audio limit reached ($audioLimit words/week). Upgrade to Pro."
                     )
                     cleanup(file)
                     return@launch

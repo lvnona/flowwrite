@@ -22,8 +22,8 @@ android {
         applicationId = "ca.u11.flowwrite"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.0.3"
+        versionCode = 5
+        versionName = "1.0.4"
 
         // The FlowWrite backend base URL (PHP proxy lives at admin-web/public,
         // deployed to flowwrite.u11.ca). Override per build type if needed.

@@ -5,6 +5,17 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.4 — versionCode 5 (2026-05-30)
+
+### Changed
+- **Free-plan weekly limits are now admin-managed.** The app reads
+  `config/limits` from Firestore live (`freeWeeklyGenerations`,
+  `freeWeeklyAudioWords`) — usage bars and the client-side mic cap update
+  within seconds when the admin changes the values. The hardcoded 50 / 2500
+  remain only as a fallback used while the first snapshot is loading.
+
+---
+
 ## 1.0.3 — versionCode 4 (2026-05-29)
 
 ### Added

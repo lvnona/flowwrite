@@ -6,6 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ca.u11.flowwrite.data.ApiKeys
+import ca.u11.flowwrite.data.FreeLimits
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.data.UserProfile
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,6 +67,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // -----------------------------------------------------------------------
 
     val apiKeys: StateFlow<ApiKeys> = fwApp.apiKeyRepo.keys
+
+    // -----------------------------------------------------------------------
+    // Live free-plan limits (admin-managed at config/limits)
+    // -----------------------------------------------------------------------
+
+    val limits: StateFlow<FreeLimits> = fwApp.limitsRepo.limits
 
     // -----------------------------------------------------------------------
     // Exposed state — templates

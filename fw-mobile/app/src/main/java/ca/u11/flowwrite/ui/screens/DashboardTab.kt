@@ -52,12 +52,10 @@ import ca.u11.flowwrite.data.BillingLauncher
 import ca.u11.flowwrite.data.UserProfile
 import ca.u11.flowwrite.service.BubbleService
 
-private const val FREE_GENERATIONS = 50
-private const val FREE_AUDIO_WORDS = 2500
-
 @Composable
 fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
     val profile  by vm.profile.collectAsState()
+    val limits   by vm.limits.collectAsState()    // live, admin-managed
     val context  = LocalContext.current
 
     var bubbleRunning by remember { mutableStateOf(BubbleService.isRunning) }
@@ -87,14 +85,14 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
                     icon    = Icons.Filled.AutoFixHigh,
                     label   = "Generations this week",
                     current = p.generationsThisWeek,
-                    limit   = if (p.plan == "pro") null else FREE_GENERATIONS,
+                    limit   = if (p.plan == "pro") null else limits.generations,
                 )
                 Spacer(Modifier.height(10.dp))
                 UsageCard(
                     icon    = Icons.Filled.RecordVoiceOver,
                     label   = "Audio words this week",
                     current = p.audioWordsThisWeek,
-                    limit   = if (p.plan == "pro") null else FREE_AUDIO_WORDS,
+                    limit   = if (p.plan == "pro") null else limits.audioWords,
                 )
                 Spacer(Modifier.height(10.dp))
 
