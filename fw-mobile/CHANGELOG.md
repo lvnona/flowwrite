@@ -5,6 +5,41 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.3 — versionCode 4 (2026-05-29)
+
+### Added
+- **Subscription (Stripe) wired in.** Dashboard's Plan card now has an
+  **Upgrade to Pro** button (Free users) and **Manage subscription** (Pro users).
+  Both open the existing server endpoints at `flowwrite.u11.ca` in **Chrome
+  Custom Tabs** — the app never talks to Stripe directly, never ships any
+  Stripe key. Plan status flips live from the Firestore user doc within ~3s of
+  the server webhook (no polling).
+- **Subscription status line** under the plan badge: shows *trialing*,
+  *cancels at period end*, or a red warning for *past due / unpaid /
+  incomplete* payments.
+- **App version is now read from the build** — Settings → About always shows
+  the real `BuildConfig.VERSION_NAME` (no more stale hardcoded numbers).
+
+### Build
+- Added `androidx.browser:browser:1.8.0` (Custom Tabs).
+
+---
+
+## 1.0.2 — versionCode 3 (2026-05-29)
+
+### Added
+- **Animated intro / onboarding** that *shows* how FlowWrite works instead of just
+  describing it: a pulsing mic with voice typing itself out (dictation), a topic →
+  style chips (Instagram / Facebook / Email) → polished post that types out, and a
+  glowing grid of supported platforms. Pure Compose animation, no extra libraries.
+
+### Fixed
+- **Screen no longer dims or locks while dictating** in the generate/template
+  panel. The panel now holds the screen on for as long as it's open, so longer
+  voice inputs won't get cut off by the screen timeout.
+
+---
+
 ## 1.0.1 — versionCode 2 (2026-05-26)
 
 ### Added

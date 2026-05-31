@@ -57,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import ca.u11.flowwrite.BuildConfig
 
 /**
  * Settings tab — always accessible from HomeScreen bottom nav.
@@ -221,7 +222,7 @@ fun SettingsTab(innerPadding: PaddingValues) {
         ) {
             Column(Modifier.padding(16.dp)) {
                 AboutRow("App", "FlowWrite Mobile")
-                AboutRow("Version", "1.0.0")
+                AboutRow("Version", "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
             }
         }
 

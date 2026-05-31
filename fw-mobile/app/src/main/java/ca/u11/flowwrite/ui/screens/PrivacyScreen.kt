@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import ca.u11.flowwrite.BuildConfig
 
 /**
  * Dedicated Privacy screen — FlowWrite-style transparency about what the app
@@ -117,7 +118,7 @@ fun PrivacyScreen(onBack: () -> Unit) {
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text(
-                    "FlowWrite Mobile · v1.0.0\nQuestions about privacy? Contact your FlowWrite administrator.",
+                    "FlowWrite Mobile · v${BuildConfig.VERSION_NAME}\nQuestions about privacy? Contact your FlowWrite administrator.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(16.dp),

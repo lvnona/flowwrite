@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,6 +48,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ca.u11.flowwrite.MainViewModel
+import ca.u11.flowwrite.data.BillingLauncher
 import ca.u11.flowwrite.data.UserProfile
 import ca.u11.flowwrite.service.BubbleService
 
@@ -127,37 +129,82 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
 
 @Composable
 private fun PlanCard(profile: UserProfile) {
-    val isPro = profile.plan == "pro"
+    val isPro = profile.plan == "pro" || profile.plan == "team"
+    val context = LocalContext.current
+
+    // Friendly subscription-status line. Non-empty values commonly seen from
+    // Stripe webhooks: active, trialing, canceled, past_due, incomplete, unpaid.
+    val statusLabel = when (profile.subscriptionStatus.lowercase()) {
+        ""           -> null
+        "active"     -> null            // implied by the Pro badge
+        "trialing"   -> "Free trial"
+        "canceled"   -> "Cancels at period end"
+        "past_due"   -> "Payment past due — please update card"
+        "unpaid"     -> "Payment failed — please update card"
+        "incomplete", "incomplete_expired" -> "Payment incomplete"
+        else         -> profile.subscriptionStatus.replaceFirstChar { it.uppercase() }
+    }
+    val needsAttention = profile.subscriptionStatus.lowercase() in
+        setOf("past_due", "unpaid", "incomplete", "incomplete_expired")
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isPro)
-                MaterialTheme.colorScheme.secondaryContainer
-            else
-                MaterialTheme.colorScheme.surfaceVariant,
+            containerColor = if (isPro) MaterialTheme.colorScheme.secondaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant,
         ),
         shape = RoundedCornerShape(16.dp),
     ) {
-        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(
-                imageVector = if (isPro) Icons.Filled.Star else Icons.Filled.Person,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(28.dp),
-            )
-            Spacer(Modifier.width(12.dp))
-            Column {
-                Text(
-                    if (isPro) "Pro Plan" else "Free Plan",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (isPro) Icons.Filled.Star else Icons.Filled.Person,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(28.dp),
                 )
-                if (profile.email.isNotBlank()) {
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
                     Text(
-                        profile.email,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (isPro) "Pro Plan" else "Free Plan",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
+                    if (profile.email.isNotBlank()) {
+                        Text(
+                            profile.email,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (statusLabel != null) {
+                        Text(
+                            statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (needsAttention) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            if (isPro) {
+                OutlinedButton(
+                    onClick = { BillingLauncher.openBillingPortal(context, profile.uid) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape    = RoundedCornerShape(10.dp),
+                ) { Text("Manage subscription") }
+            } else {
+                Button(
+                    onClick = {
+                        BillingLauncher.openCheckout(context, profile.uid, profile.email)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape    = RoundedCornerShape(10.dp),
+                ) {
+                    Icon(Icons.Filled.Star, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Upgrade to Pro")
                 }
             }
         }

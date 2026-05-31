@@ -119,6 +119,7 @@ private fun DocumentSnapshot.toUserProfile(uid: String, weekKey: String): UserPr
         uid = uid,
         email = getString("email") ?: "",
         plan = getString("plan") ?: "free",
+        subscriptionStatus = getString("subscriptionStatus") ?: "",
         popupProvider = getString("popupProvider") ?: "openai",
         generationsThisWeek = (usageWeekly[weekKey] as? Long)?.toInt() ?: 0,
         audioWordsThisWeek  = (audioWeekly[weekKey]  as? Long)?.toInt() ?: 0,
