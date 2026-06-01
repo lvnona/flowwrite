@@ -26,6 +26,39 @@ export const LANGUAGES = [
   'Chinese (Traditional)', 'Japanese', 'Korean', 'Vietnamese', 'Thai', 'Indonesian',
 ];
 
+/**
+ * Render a template's user-defined Additional Instructions as a high-priority
+ * block the model must follow verbatim. Returns an empty string when the
+ * template has no extra instructions — callers can safely concatenate it.
+ *
+ * The block is framed as MUST-PRESERVE facts (names, numbers, prices) that
+ * outrank style choices, so the model treats them as constants in the output
+ * rather than paraphrasing them away.
+ */
+function renderCustomInstructions(template) {
+  const raw = (template?.additionalInstructions || '').trim();
+  if (!raw) return '';
+  return [
+    ``,
+    `═══════════════════════════════════════════`,
+    `USER-DEFINED INSTRUCTIONS — HIGHEST PRIORITY:`,
+    `═══════════════════════════════════════════`,
+    raw,
+    `═══════════════════════════════════════════`,
+    `RULES FOR THE INSTRUCTIONS ABOVE (apply BEFORE every other rule):`,
+    `- Treat every fact above (names, phone numbers, addresses, prices, dates,`,
+    `  URLs, brand names, custom phrases) as CONSTANT — copy verbatim, never`,
+    `  paraphrase, abbreviate, translate, autocomplete, or change a digit.`,
+    `- If something in the user's draft contradicts the instructions above,`,
+    `  the instructions WIN.`,
+    `- If the instructions tell you to include something, include it. If they`,
+    `  tell you to avoid something, avoid it absolutely.`,
+    `- These instructions outrank tone, length, style and template — they are`,
+    `  user-authored ground truth.`,
+    ``,
+  ].join('\n');
+}
+
 const LENGTH_DIRECTIVES = {
   Short:  '1–2 sentences',
   Medium: '1 short paragraph',
@@ -158,6 +191,7 @@ function buildEmailTemplatePrompt({ fieldContext, tone, length, userInput, email
         ].join('\n')
       : `WHAT THIS EMAIL IS ABOUT: (empty — write a sensible, on-brand email for the context.)`,
     ``,
+    renderCustomInstructions(emailTemplate),
     `CRITICAL RULES:`,
     `1. Write AS the sender, first person. Never reply as if you were the recipient.`,
     `2. A subject line is welcome — if you include one, put it on the first line prefixed with "Subject: ".`,
@@ -214,13 +248,14 @@ function buildUserExamplePrompt({
         ].join('\n')
       : `USER'S TOPIC: (empty — invent something plausible for the platform.)`,
     ``,
+    renderCustomInstructions(userTemplate),
     `CRITICAL RULES:`,
     `1. The EXAMPLE shows you HOW to write. The TOPIC tells you WHAT to write about.`,
     `2. You are the user. Never respond to the topic as if you were the recipient.`,
     `3. Don't copy the example's words — copy its STYLE.`,
     `4. Match the example's emoji and hashtag pattern precisely (same count range, same vibe).`,
     `5. Output ONLY the final content. No preamble, no quotes, no commentary, no "here you go".`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 // ────────────────────────────────────────────────────────────────────────────

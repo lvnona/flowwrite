@@ -11,6 +11,7 @@ import NavBar from '../components/NavBar.jsx';
 import TemplateModal from '../components/TemplateModal.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useTemplates } from '../hooks/useTemplates.js';
+import { customerPortalUrl } from '../utils/billing.js';
 
 const NICHES = ['Real Estate', 'Recruitment', 'Sales', 'General', 'Custom'];
 
@@ -408,6 +409,27 @@ export default function Settings() {
               onClick={() => setEditing('new')}
             >
               + New template
+            </button>
+          </div>
+
+          {/* Customer portal banner — templates auto-sync across devices, so
+              users can edit on a phone or any browser if it's more comfortable. */}
+          <div className="mb-4 p-3.5 rounded-xl border border-accent/30 bg-accent/[0.08] flex items-start gap-3">
+            <span className="text-base mt-0.5">🌐</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium">Edit templates online</div>
+              <p className="text-[11px] text-white/55 leading-relaxed mt-0.5">
+                Prefer a bigger screen or working from your phone? Open the customer portal
+                in your browser to manage templates, see usage stats and your subscription.
+                Changes sync to FlowWrite automatically.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="pill text-[12px] shrink-0 whitespace-nowrap"
+              onClick={() => window.flowwrite?.openExternal?.(customerPortalUrl())}
+            >
+              Open online ↗
             </button>
           </div>
 

@@ -18,3 +18,13 @@ export function portalUrl(uid) {
   const q = new URLSearchParams({ uid: uid || '' });
   return `${SITE}/billing-portal.php?${q.toString()}`;
 }
+
+/**
+ * Where "Edit online" / "Customer portal" sends the user — the web SPA at
+ * /app.html. Customers can manage their templates, see their stats and access
+ * billing from any device (phone, tablet, friend's laptop) without needing the
+ * desktop installed.
+ */
+export function customerPortalUrl() {
+  return `${SITE}/app.html`;
+}

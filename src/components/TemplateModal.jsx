@@ -21,6 +21,7 @@ export default function TemplateModal({ open, initial, onClose, onSave }) {
   const [fromName, setFromName] = useState('');
   const [signature, setSignature] = useState('');
   const [notes, setNotes] = useState('');
+  const [additionalInstructions, setAdditionalInstructions] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -32,6 +33,7 @@ export default function TemplateModal({ open, initial, onClose, onSave }) {
     setFromName(initial?.fromName || '');
     setSignature(initial?.signature || '');
     setNotes(initial?.notes || '');
+    setAdditionalInstructions(initial?.additionalInstructions || '');
   }, [open, initial]);
 
   const isEmail = purpose === 'Email';
@@ -50,6 +52,7 @@ export default function TemplateModal({ open, initial, onClose, onSave }) {
       fromName: fromName.trim(),
       signature,
       notes: notes.trim(),
+      additionalInstructions: additionalInstructions.trim(),
     });
     setSaving(false);
     onClose();
@@ -181,6 +184,22 @@ export default function TemplateModal({ open, initial, onClose, onSave }) {
                 </p>
               </Field>
             )}
+
+            <Field label="Additional Instructions (sent to AI — facts to preserve exactly)">
+              <textarea
+                className="w-full bg-white/5 border border-white/10 rounded-lg p-3 text-sm leading-relaxed focus:outline-none focus:border-accent resize-y"
+                rows={4}
+                placeholder={
+                  'Lines the AI MUST follow when generating from this template. Use this for personal facts you want kept verbatim — names, phone numbers, addresses, prices, dates, links.\n\nExamples:\n- My name is Norm. Always sign emails as Norm — never "Norma" or "Norman".\n- My phone is +1 555-0100. Use exactly this number when mentioning contact info.\n- The product price is $49 — never quote any other figure.'
+                }
+                value={additionalInstructions}
+                onChange={(e) => setAdditionalInstructions(e.target.value)}
+                spellCheck={false}
+              />
+              <p className="text-[11px] text-white/40 mt-1">
+                The AI receives these as strict rules and must preserve every fact you write here exactly — never paraphrase, abbreviate, or change a digit.
+              </p>
+            </Field>
 
             <Field label="Notes (optional — your own reminder, never sent to AI)">
               <input
