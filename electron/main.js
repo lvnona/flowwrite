@@ -145,7 +145,9 @@ function cloudGenerations() { return cloudUsageNow().generationsThisWeek || 0; }
 function cloudAudioWords() { return cloudUsageNow().audioWordsThisWeek || 0; }
 function bumpCloudGenerations() {
   const u = cloudUsageNow();
+  const stored = store.get('cloudUsage') || {};
   store.set('cloudUsage', {
+    uid: stored.uid || '',  // preserve the user's identity across bumps
     week: isoWeekKey(),
     generationsThisWeek: (u.generationsThisWeek || 0) + 1,
     audioWordsThisWeek: u.audioWordsThisWeek || 0,
@@ -153,7 +155,9 @@ function bumpCloudGenerations() {
 }
 function bumpCloudAudioWords(n) {
   const u = cloudUsageNow();
+  const stored = store.get('cloudUsage') || {};
   store.set('cloudUsage', {
+    uid: stored.uid || '',  // preserve the user's identity across bumps
     week: isoWeekKey(),
     generationsThisWeek: u.generationsThisWeek || 0,
     audioWordsThisWeek: (u.audioWordsThisWeek || 0) + (n || 0),
@@ -931,14 +935,26 @@ ipcMain.handle('set-plan', (_e, plan) => {
 // (e.g. Firestore hasn't caught up) shouldn't briefly un-block the user.
 ipcMain.handle('set-usage', (_e, u = {}) => {
   const wk = isoWeekKey();
+  const stored = store.get('cloudUsage') || {};
   const cur = cloudUsageNow(); // already zero'd if it was from a previous week
-  const sameWeek = (store.get('cloudUsage') || {}).week === wk;
+  // Anti-spoof guard ("only-raise") must scope to the same user — otherwise a
+  // new sign-in on a device that previously hosted a heavy user inherits that
+  // user's local counter and immediately reports "limit reached". So: if the
+  // UID changes OR the week changes, RESET to the value the renderer pushed
+  // (which came straight from the new user's Firestore profile). Same-uid +
+  // same-week → keep the only-raise behaviour so a user can't lower their own
+  // counter by claiming smaller numbers.
+  const newUid = (typeof u.uid === 'string' && u.uid) ? u.uid : '';
+  const sameUser = newUid !== '' && stored.uid === newUid;
+  const sameWeek = stored.week === wk;
+  const keep = sameUser && sameWeek;
   store.set('cloudUsage', {
+    uid:  newUid || stored.uid || '',
     week: wk,
-    generationsThisWeek: sameWeek
+    generationsThisWeek: keep
       ? Math.max(cur.generationsThisWeek || 0, Number(u.generationsThisWeek) || 0)
       : (Number(u.generationsThisWeek) || 0),
-    audioWordsThisWeek: sameWeek
+    audioWordsThisWeek: keep
       ? Math.max(cur.audioWordsThisWeek || 0, Number(u.audioWordsThisWeek) || 0)
       : (Number(u.audioWordsThisWeek) || 0),
   });

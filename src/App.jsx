@@ -94,10 +94,14 @@ export default function App() {
     if (profile.plan) window.flowwrite?.setPlan?.(profile.plan);
     const wk = thisWeekKey();
     window.flowwrite?.setUsage?.({
+      // Including the uid lets the main process detect a user switch on the
+      // same device and reset its local counter — otherwise a new sign-in
+      // inherits the previous user's "limit reached" state.
+      uid: user?.uid || '',
       generationsThisWeek: profile.usageWeekly?.[wk] || 0,
       audioWordsThisWeek: profile.audioWordsWeekly?.[wk] || 0,
     });
-  }, [profile, route]);
+  }, [user, profile, route]);
 
   // The main process routes each transcription's word count to the main window
   // (the persistent, authed renderer) so it lands in the user's cloud profile —
