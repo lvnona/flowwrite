@@ -5,6 +5,21 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.9 — versionCode 10 (2026-05-31)
+
+### Added
+- **"Edit templates online" banner** at the top of the Templates tab — taps
+  open the web portal (`flowwrite.u11.ca/app.html`) for a roomier template
+  editor with the new "Additional Instructions" field. Templates round-trip
+  via Firestore within seconds.
+- **"Manage account online" row** at the top of Settings → Account — opens
+  the same portal for stats, template management, and subscription
+  controls on any device.
+- Both entries open in **Chrome Custom Tabs** (preserves Google sign-in),
+  not a WebView.
+
+---
+
 ## 1.0.8 — versionCode 9 (2026-05-31)
 
 ### Fixed

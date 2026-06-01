@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -58,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import ca.u11.flowwrite.BuildConfig
+import ca.u11.flowwrite.data.WebPortal
 
 /**
  * Settings tab — always accessible from HomeScreen bottom nav.
@@ -128,6 +130,20 @@ fun SettingsTab(innerPadding: PaddingValues) {
             .padding(horizontal = 20.dp),
     ) {
         Spacer(Modifier.height(8.dp))
+
+        SectionHeader("Account")
+        Spacer(Modifier.height(8.dp))
+
+        NavRow(
+            icon        = Icons.Filled.Language,
+            title       = "Manage account online",
+            description = "View stats, manage templates and your subscription on any device.",
+            onClick     = { WebPortal.open(context) },
+        )
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(20.dp))
 
         SectionHeader("Permissions")
         Spacer(Modifier.height(8.dp))
