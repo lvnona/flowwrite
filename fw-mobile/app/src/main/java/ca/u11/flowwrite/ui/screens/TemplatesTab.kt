@@ -264,14 +264,18 @@ private fun TemplateEditorDialog(
     onSave: (Template) -> Unit,
     onDelete: (() -> Unit)?,
 ) {
-    var name      by remember { mutableStateOf(initial.name) }
-    var purpose   by remember { mutableStateOf(initial.purpose.ifBlank { "Message" }) }
-    var platform  by remember { mutableStateOf(initial.platform) }
-    var content   by remember { mutableStateOf(initial.content) }
-    var fromName  by remember { mutableStateOf(initial.fromName) }
-    var signature by remember { mutableStateOf(initial.signature) }
+    var name                   by remember { mutableStateOf(initial.name) }
+    var purpose                by remember { mutableStateOf(initial.purpose.ifBlank { "Message" }) }
+    var platform               by remember { mutableStateOf(initial.platform) }
+    var content                by remember { mutableStateOf(initial.content) }
+    var fromName               by remember { mutableStateOf(initial.fromName) }
+    var signature              by remember { mutableStateOf(initial.signature) }
+    var notes                  by remember { mutableStateOf(initial.notes) }
+    var additionalInstructions by remember { mutableStateOf(initial.additionalInstructions) }
 
     val isEmail = purpose == "Email"
+    // Match desktop: emails need a signature; everything else needs a style example.
+    val canSave = name.isNotBlank() && (if (isEmail) signature.isNotBlank() else content.isNotBlank())
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -279,7 +283,7 @@ private fun TemplateEditorDialog(
         text = {
             Column(
                 Modifier
-                    .heightIn(max = 460.dp)
+                    .heightIn(max = 560.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -313,7 +317,7 @@ private fun TemplateEditorDialog(
 
                 OutlinedTextField(
                     value = content, onValueChange = { content = it },
-                    label = { Text(if (isEmail) "Example email (style)" else "Style example / content") },
+                    label = { Text(if (isEmail) "Example email (optional)" else "Style example / content") },
                     placeholder = { Text("Paste an example written in the style you want…") },
                     minLines = 4, modifier = Modifier.fillMaxWidth().height(140.dp),
                 )
@@ -326,10 +330,31 @@ private fun TemplateEditorDialog(
                     )
                     OutlinedTextField(
                         value = signature, onValueChange = { signature = it },
-                        label = { Text("Signature (optional)") },
+                        label = { Text("Signature *") },
+                        placeholder = { Text("Appended verbatim to every generated email") },
                         minLines = 2, modifier = Modifier.fillMaxWidth(),
                     )
                 }
+
+                // Additional instructions — HIGHEST-PRIORITY rules added to every
+                // generation from this template (names, numbers, must-include phrases…).
+                OutlinedTextField(
+                    value = additionalInstructions,
+                    onValueChange = { additionalInstructions = it },
+                    label = { Text("Additional instructions (optional)") },
+                    placeholder = {
+                        Text("Names, phone numbers, custom phrases — copied verbatim every time")
+                    },
+                    minLines = 2, modifier = Modifier.fillMaxWidth().height(110.dp),
+                )
+
+                // Private notes — never sent to the AI, just for the user.
+                OutlinedTextField(
+                    value = notes, onValueChange = { notes = it },
+                    label = { Text("Notes (optional, private)") },
+                    placeholder = { Text("Reminders for yourself") },
+                    minLines = 2, modifier = Modifier.fillMaxWidth().height(90.dp),
+                )
 
                 if (onDelete != null) {
                     TextButton(
@@ -355,10 +380,12 @@ private fun TemplateEditorDialog(
                             content = content,
                             fromName = fromName.trim(),
                             signature = signature.trim(),
+                            notes = notes.trim(),
+                            additionalInstructions = additionalInstructions.trim(),
                         )
                     )
                 },
-                enabled = name.isNotBlank() && content.isNotBlank(),
+                enabled = canSave,
             ) { Text("Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },

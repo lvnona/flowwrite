@@ -43,6 +43,7 @@ class TemplateRepository {
                         fromName  = doc.getString("fromName")  ?: "",
                         signature = doc.getString("signature") ?: "",
                         notes     = doc.getString("notes")     ?: "",
+                        additionalInstructions = doc.getString("additionalInstructions") ?: "",
                         updatedAt = doc.getLong("updatedAt")   ?: 0L,
                         createdAt = doc.getLong("createdAt")   ?: 0L,
                     )
@@ -74,6 +75,7 @@ class TemplateRepository {
             "fromName"  to template.fromName,
             "signature" to template.signature,
             "notes"     to template.notes,
+            "additionalInstructions" to template.additionalInstructions,
             "updatedAt" to now,
             "createdAt" to (template.createdAt.takeIf { it > 0 } ?: now),
         )

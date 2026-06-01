@@ -25,6 +25,12 @@ data class Template(
     val fromName: String = "",
     val signature: String = "",
     val notes: String = "",
+    /**
+     * Highest-priority custom instructions, prepended to the AI prompt. Used
+     * to lock in names, phone numbers, URLs, custom phrases etc. that must
+     * appear verbatim — overrides tone / length / style.
+     */
+    val additionalInstructions: String = "",
     val updatedAt: Long = 0L,
     val createdAt: Long = 0L,
 )

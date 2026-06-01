@@ -84,6 +84,35 @@ object PromptBuilder {
         return buildGenericPrompt(draft, contentType, tone, length)
     }
 
+    /**
+     * Renders the template's `additionalInstructions` as a HIGHEST-PRIORITY
+     * preamble, mirrored verbatim from the desktop `renderCustomInstructions`.
+     * Returns "" if the template is null or has no instructions.
+     */
+    private fun renderCustomInstructions(template: Template?): String {
+        val raw = template?.additionalInstructions?.trim().orEmpty()
+        if (raw.isEmpty()) return ""
+        return """
+
+        ═══════════════════════════════════════════
+        USER-DEFINED INSTRUCTIONS — HIGHEST PRIORITY:
+        ═══════════════════════════════════════════
+        $raw
+        ═══════════════════════════════════════════
+        RULES FOR THE INSTRUCTIONS ABOVE (apply BEFORE every other rule):
+        - Treat every fact above (names, phone numbers, addresses, prices, dates,
+          URLs, brand names, custom phrases) as CONSTANT — copy verbatim, never
+          paraphrase, abbreviate, translate, autocomplete, or change a digit.
+        - If something in the user's draft contradicts the instructions above,
+          the instructions WIN.
+        - If the instructions tell you to include something, include it. If they
+          tell you to avoid something, avoid it absolutely.
+        - These instructions outrank tone, length, style and template — they are
+          user-authored ground truth.
+
+        """.trimIndent()
+    }
+
     /** Appends the template's signature verbatim (emails only), if present. */
     fun appendSignature(generated: String, template: Template?): String {
         if (template == null) return generated
@@ -134,7 +163,9 @@ object PromptBuilder {
             "USER'S TOPIC: (empty — invent something plausible for the platform.)"
         }
 
-        return """
+        val custom = renderCustomInstructions(template)
+
+        return custom + """
         You are a writing assistant. Generate a new piece of content that matches
         the user's PERSONAL STYLE EXAMPLE below.
 
@@ -187,7 +218,9 @@ object PromptBuilder {
             "WHAT THIS EMAIL IS ABOUT: (empty — write a sensible, on-brand email.)"
         }
 
-        return """
+        val custom = renderCustomInstructions(template)
+
+        return custom + """
         You are writing an email on behalf of the sender, in their first-person voice.$senderLine
         $exampleBlock
 

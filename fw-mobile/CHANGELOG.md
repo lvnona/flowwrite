@@ -5,6 +5,25 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.10 — versionCode 11 (2026-06-01)
+
+### Added
+- **Mobile template editor now has full desktop parity** — added the new
+  **Additional Instructions** field (highest-priority verbatim rules:
+  names, phone numbers, must-include phrases) and the **Notes** field
+  (private reminders, never sent to the AI).
+- The `additionalInstructions` field is now wired into the AI prompt the
+  same way the desktop does — prepended as the highest-priority section
+  before every generation that uses the template.
+
+### Changed
+- For **Email** templates, the editor now correctly treats *Signature* as
+  required (instead of *content*), matching desktop. Save button stays
+  disabled until you have a name + signature for emails (or a name +
+  style content for other types).
+
+---
+
 ## 1.0.9 — versionCode 10 (2026-05-31)
 
 ### Added
