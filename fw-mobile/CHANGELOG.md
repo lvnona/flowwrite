@@ -5,6 +5,22 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.6 — versionCode 7 (2026-05-31)
+
+### Fixed
+- **Fresh Google sign-in no longer hangs.** The app now creates the
+  `users/{uid}` Firestore document on first sign-in (with the exact
+  rule-compliant fields `plan="free"`, `status="active"`, plus email,
+  displayName, photoURL, createdAt, lastSeen). Previously the document was
+  never created, so the snapshot listener never emitted, the Dashboard spun
+  forever, and the bubble never became reachable.
+- The doc-create call is also invoked on every app start, defensively, in
+  case a prior attempt failed.
+- Firestore listener errors are now logged loudly (tag `FwProfile`) with a
+  hint pointing at the CREATE rule — no more silent failures.
+
+---
+
 ## 1.0.5 — versionCode 6 (2026-05-31)
 
 ### Fixed

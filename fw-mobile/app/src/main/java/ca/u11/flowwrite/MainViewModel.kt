@@ -104,6 +104,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (user == null) {
             _screen.value = AppScreen.SignIn
         } else {
+            // Make sure the users/{uid} doc exists (covers users whose previous
+            // sign-in didn't create it — otherwise the listener would never emit
+            // and the Dashboard would spin forever).
+            viewModelScope.launch { profileRepo.ensureUserDoc(user) }
             startProfileListener(user.uid)
             startTemplateListener(user.uid)
             navigateAfterAuth()
@@ -121,6 +125,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             auth.signInWithGoogle(activity)
                 .onSuccess { user ->
+                    // CREATE users/{uid} on first sign-in (rule requires
+                    // plan='free' + status='active'). Awaited so the listener
+                    // emits on its first read.
+                    profileRepo.ensureUserDoc(user)
                     startProfileListener(user.uid)
                     startTemplateListener(user.uid)
                     navigateAfterAuth()
@@ -220,7 +228,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun startProfileListener(uid: String) {
         viewModelScope.launch {
             profileRepo.userProfileFlow(uid)
-                .catch { /* offline / permission error — keep last value */ }
+                .catch { e ->
+                    // Surface to logcat so a Dashboard stuck on null is debuggable.
+                    // Common causes: PERMISSION_DENIED or users/{uid} not yet created.
+                    android.util.Log.e("FwProfile", "userProfileFlow error: ${e.message}", e)
+                }
                 .collectLatest { profile -> _profile.value = profile }
         }
     }

@@ -1,5 +1,7 @@
 package ca.u11.flowwrite.data
 
+import android.util.Log
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.ktx.firestore
@@ -26,6 +28,8 @@ class ProfileRepository {
 
     private val db = Firebase.firestore
 
+    private val TAG = "FwProfile"
+
     // -----------------------------------------------------------------------
     // Real-time listener
     // -----------------------------------------------------------------------
@@ -41,6 +45,51 @@ class ProfileRepository {
             }
 
         awaitClose { listener.remove() }
+    }
+
+    // -----------------------------------------------------------------------
+    // First-sign-in / lifecycle — create the users/{uid} doc if missing
+    // -----------------------------------------------------------------------
+
+    /**
+     * Ensures the [users/{uid}] document exists.  The Firestore CREATE rule
+     * requires plan == "free" AND status == "active" — this writes exactly
+     * that, plus profile fields and timestamps.
+     *
+     * Safe to call repeatedly: if the doc already exists, only [lastSeen] is
+     * touched (which keeps plan / status / expiresAt unchanged, satisfying the
+     * owner-update rule).
+     *
+     * Errors are logged but never thrown — the snapshot listener stays open
+     * and will pick up the doc when it eventually lands.
+     */
+    suspend fun ensureUserDoc(user: FirebaseUser) {
+        val ref = db.collection("users").document(user.uid)
+        try {
+            val snap = ref.get().await()
+            if (!snap.exists()) {
+                val data = mapOf(
+                    "plan"        to "free",
+                    "status"      to "active",
+                    "email"       to (user.email ?: ""),
+                    "displayName" to (user.displayName ?: ""),
+                    "photoURL"    to (user.photoUrl?.toString() ?: ""),
+                    "createdAt"   to FieldValue.serverTimestamp(),
+                    "lastSeen"    to FieldValue.serverTimestamp(),
+                )
+                ref.set(data).await()
+                Log.i(TAG, "Created users/${user.uid} (plan=free, status=active)")
+            } else {
+                ref.update("lastSeen", FieldValue.serverTimestamp()).await()
+            }
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "ensureUserDoc PERMISSION_DENIED or write failed for ${user.uid} — " +
+                    "check Firestore CREATE rule requires plan='free' AND status='active': ${e.message}",
+                e,
+            )
+        }
     }
 
     // -----------------------------------------------------------------------
