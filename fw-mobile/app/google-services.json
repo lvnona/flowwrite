@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "276442606854-4t5eqe2h96pi25hve4m577g0iklikr69.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "ca.u11.flowwrite",
+            "certificate_hash": "bbcb28993b1315b0f43eb48470a7d11261186103"
+          }
+        },
+        {
           "client_id": "276442606854-fn762clt4grlclbns2r7lcs9a1qu9ukh.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
@@ -37,6 +45,13 @@
             {
               "client_id": "276442606854-17qqhb2oq9g4qkmi0n6q1ddscnb3vumg.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "276442606854-qu5dsgo2asa482ebgk38j8errjkuj7ov.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "ca.u11.flowwrite"
+              }
             }
           ]
         }

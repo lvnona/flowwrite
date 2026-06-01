@@ -5,6 +5,19 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.5 — versionCode 6 (2026-05-31)
+
+### Fixed
+- **Google Sign-In** now works for users on the released build. The release
+  signing key's SHA-1/SHA-256 fingerprints have been registered in Firebase
+  Console, and the app ships with the refreshed `google-services.json`.
+- This release also switches the GitHub-distributed APK from the **debug**
+  build to the **release** build (R8-minified, ~3.6 MB instead of ~22 MB,
+  release-signed). Users on a previous build must uninstall first before
+  installing this one (Android requires matching signatures for updates).
+
+---
+
 ## 1.0.4 — versionCode 5 (2026-05-30)
 
 ### Changed
