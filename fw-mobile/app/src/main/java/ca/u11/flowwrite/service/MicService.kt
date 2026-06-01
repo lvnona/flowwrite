@@ -129,14 +129,10 @@ class MicService : LifecycleService() {
                 // ── Transcribe (Whisper → polish) ────────────────────────────
                 val result = withContext(Dispatchers.IO) { app.api.transcribe(file) }
 
-                // ── Increment usage in Firestore ─────────────────────────────
-                withContext(Dispatchers.IO) {
-                    app.profileRepo.incrementAudioWords(uid, result.words)
-                }
-
+                // ── Deliver the text FIRST ───────────────────────────────────
+                // The dictated text is what the user is waiting for; never let
+                // a downstream usage-counter write block it.
                 RecordingBus.emitText(result.text)
-
-                // ── Insert text ──────────────────────────────────────────────
                 withContext(Dispatchers.Main) {
                     val svc = FwAccessibilityService.instance
                     if (svc != null) {
@@ -149,6 +145,11 @@ class MicService : LifecycleService() {
                         )
                         RecordingBus.emitError("Text copied — enable Accessibility service for auto-insert")
                     }
+                }
+
+                // ── Bump usage in Firestore (best-effort, errors logged) ─────
+                withContext(Dispatchers.IO) {
+                    app.profileRepo.incrementAudioWords(uid, result.words)
                 }
 
             } catch (e: ApiClient.LimitExceededException) {

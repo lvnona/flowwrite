@@ -71,6 +71,12 @@ class ProfileRepository {
                 val data = mapOf(
                     "plan"        to "free",
                     "status"      to "active",
+                    // expiresAt must EXIST on the doc — the owner-update rule
+                    // compares request.resource.data.expiresAt == resource.data.expiresAt,
+                    // which can fail when the field is missing on both sides.
+                    // Stored as explicit null for free users; the backend sets
+                    // a Timestamp when a Stripe subscription activates.
+                    "expiresAt"   to null,
                     "email"       to (user.email ?: ""),
                     "displayName" to (user.displayName ?: ""),
                     "photoURL"    to (user.photoUrl?.toString() ?: ""),
@@ -78,7 +84,7 @@ class ProfileRepository {
                     "lastSeen"    to FieldValue.serverTimestamp(),
                 )
                 ref.set(data).await()
-                Log.i(TAG, "Created users/${user.uid} (plan=free, status=active)")
+                Log.i(TAG, "Created users/${user.uid} (plan=free, status=active, expiresAt=null)")
             } else {
                 ref.update("lastSeen", FieldValue.serverTimestamp()).await()
             }
@@ -116,13 +122,17 @@ class ProfileRepository {
     suspend fun incrementGeneration(uid: String) {
         val weekKey  = thisWeekKey()
         val monthKey = thisMonthKey()
-        db.collection("users").document(uid).update(
-            mapOf(
-                "usageWeekly.$weekKey" to FieldValue.increment(1L),
-                "usage.$monthKey"      to FieldValue.increment(1L),
-                "allTimeUsage"         to FieldValue.increment(1L),
-            )
-        ).await()
+        try {
+            db.collection("users").document(uid).update(
+                mapOf(
+                    "usageWeekly.$weekKey" to FieldValue.increment(1L),
+                    "usage.$monthKey"      to FieldValue.increment(1L),
+                    "allTimeUsage"         to FieldValue.increment(1L),
+                )
+            ).await()
+        } catch (e: Exception) {
+            Log.e(TAG, "incrementGeneration($uid) failed: ${e.message}", e)
+        }
     }
 
     /**
@@ -132,13 +142,17 @@ class ProfileRepository {
     suspend fun incrementAudioWords(uid: String, wordCount: Int) {
         val weekKey  = thisWeekKey()
         val monthKey = thisMonthKey()
-        db.collection("users").document(uid).update(
-            mapOf(
-                "audioWordsWeekly.$weekKey" to FieldValue.increment(wordCount.toLong()),
-                "audioWords.$monthKey"      to FieldValue.increment(wordCount.toLong()),
-                "allTimeAudioWords"         to FieldValue.increment(wordCount.toLong()),
-            )
-        ).await()
+        try {
+            db.collection("users").document(uid).update(
+                mapOf(
+                    "audioWordsWeekly.$weekKey" to FieldValue.increment(wordCount.toLong()),
+                    "audioWords.$monthKey"      to FieldValue.increment(wordCount.toLong()),
+                    "allTimeAudioWords"         to FieldValue.increment(wordCount.toLong()),
+                )
+            ).await()
+        } catch (e: Exception) {
+            Log.e(TAG, "incrementAudioWords($uid, $wordCount) failed: ${e.message}", e)
+        }
     }
 }
 

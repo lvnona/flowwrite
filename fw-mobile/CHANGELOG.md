@@ -5,6 +5,23 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.8 — versionCode 9 (2026-05-31)
+
+### Fixed
+- **New users can dictate again.** First-time accounts were getting
+  *"Transcription failed: Permission denied"* because the Firestore
+  owner-update rule (`expiresAt == expiresAt`) was failing when the doc
+  was created without an `expiresAt` field. The user-doc create now
+  includes `expiresAt: null` so the rule's equality check is satisfied
+  for free-plan users. (Existing admins were unaffected because the
+  rule's `isAdmin()` branch bypassed the equality check entirely.)
+- **Usage-counter writes can never lose your dictation now.** The
+  transcribed text is inserted into the field BEFORE the Firestore
+  usage increment runs, and increment failures are logged but no longer
+  surface as a user-visible error.
+
+---
+
 ## 1.0.7 — versionCode 8 (2026-05-31)
 
 ### Fixed
