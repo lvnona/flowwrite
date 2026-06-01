@@ -9,6 +9,7 @@ import ca.u11.flowwrite.data.ApiKeys
 import ca.u11.flowwrite.data.FreeLimits
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.data.UserProfile
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,6 +46,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val api          get() = fwApp.api
 
     private val prefs = app.getSharedPreferences("fw_prefs", Context.MODE_PRIVATE)
+
+    // Live Firestore listeners are per-user.  We track them so sign-out (and
+    // re-subscribing for a different user) tears the previous ones down
+    // cleanly — otherwise the old listener keeps firing and can briefly
+    // overwrite the new user's data after a Google account switch.
+    private var profileJob: Job? = null
+    private var templateJob: Job? = null
 
     // -----------------------------------------------------------------------
     // Exposed state — auth / navigation
@@ -142,8 +150,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun signOut() {
+        // Tear down per-user Firestore listeners — otherwise they keep firing
+        // on the previous user's docs and can briefly overwrite a new
+        // sign-in's data.
+        profileJob?.cancel();  profileJob = null
+        templateJob?.cancel(); templateJob = null
+
         auth.signOut()
-        _profile.value = null
+
+        // Clear all per-user in-memory state so the next sign-in starts clean
+        // (no stale templates / generation result flashing through).
+        _profile.value         = null
+        _templates.value       = emptyList()
+        _generateResult.value  = null
+        _generateError.value   = null
+
         _screen.value = AppScreen.SignIn
     }
 
@@ -226,7 +247,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun startProfileListener(uid: String) {
-        viewModelScope.launch {
+        profileJob?.cancel()   // tear down any previous user's listener first
+        profileJob = viewModelScope.launch {
             profileRepo.userProfileFlow(uid)
                 .catch { e ->
                     // Surface to logcat so a Dashboard stuck on null is debuggable.
@@ -238,7 +260,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun startTemplateListener(uid: String) {
-        viewModelScope.launch {
+        templateJob?.cancel()
+        templateJob = viewModelScope.launch {
             fwApp.templateRepo.templatesFlow(uid)
                 .catch { /* ignore errors — show empty list */ }
                 .collectLatest { list -> _templates.value = list }

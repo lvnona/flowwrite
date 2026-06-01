@@ -5,6 +5,18 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.7 — versionCode 8 (2026-05-31)
+
+### Fixed
+- **Sign-out now fully tears down per-user state.** The Firestore snapshot
+  listeners for `users/{uid}` and `users/{uid}/templates` are cancelled,
+  and the in-memory profile / templates / last generation result are cleared.
+  Previously the old listeners stayed alive after sign-out and could briefly
+  overwrite a different account's data when switching users (no real
+  counter-leak, but a visible flicker of stale data).
+
+---
+
 ## 1.0.6 — versionCode 7 (2026-05-31)
 
 ### Fixed
