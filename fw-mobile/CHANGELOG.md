@@ -5,6 +5,24 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.11 — versionCode 12 (2026-06-01)
+
+### Fixed (Google Play sensitive-permission compliance)
+- **First-run onboarding now shows the prominent disclosure** before
+  sending the user to enable the Accessibility service. Previously the
+  disclosure only appeared on the Settings tab re-grant flow — the
+  onboarding path jumped straight to system settings, which is a
+  Play-policy violation for accessibility-using apps. The disclosure
+  composable has been extracted into a shared file
+  (`ui/screens/AccessibilityDisclosureDialog.kt`) so both screens use
+  the same wording.
+
+> **Releases now publish to `lvnona/flowwrite-android`** (separate repo,
+> tag scheme `v1.0.X` with no `mobile-` prefix). See
+> `fw-mobile/RELEASING.md`.
+
+---
+
 ## 1.0.10 — versionCode 11 (2026-06-01)
 
 ### Added

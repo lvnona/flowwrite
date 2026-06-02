@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -56,6 +57,22 @@ fun PermissionsScreen(vm: MainViewModel) {
     // A simple counter-based key so remember() blocks re-evaluate when we
     // return from a system settings screen.
     var tick by remember { mutableIntStateOf(0) }
+
+    // Prominent disclosure shown BEFORE sending the user to enable the
+    // Accessibility service for the first time. Required by Google Play's
+    // Accessibility-API policy on the *first-run* flow, not only the
+    // re-grant path in Settings.
+    var showAccessibilityDisclosure by remember { mutableStateOf(false) }
+    if (showAccessibilityDisclosure) {
+        AccessibilityDisclosureDialog(
+            onDismiss = { showAccessibilityDisclosure = false },
+            onContinue = {
+                showAccessibilityDisclosure = false
+                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                tick++
+            },
+        )
+    }
 
     // --- check state of each permission ---
 
@@ -141,16 +158,14 @@ fun PermissionsScreen(vm: MainViewModel) {
             },
         )
 
-        // Accessibility — opens system Accessibility settings
+        // Accessibility — show prominent disclosure FIRST (Play-policy requirement),
+        // then the dialog's Continue button opens Settings.ACTION_ACCESSIBILITY_SETTINGS.
         PermRow(
             icon = Icons.Filled.Accessibility,
             title = "Accessibility service",
             description = "Inserts text into the focused field",
             granted = hasAccessibility,
-            onGrant = {
-                context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                tick++
-            },
+            onGrant = { showAccessibilityDisclosure = true },
         )
 
         // Microphone — runtime dialog
