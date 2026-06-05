@@ -18,16 +18,16 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Foreground service that records audio and transcribes it directly via
- * OpenAI Whisper — no PHP proxy involved.
+ * Foreground service that records audio and sends it to the FlowWrite server
+ * proxy for transcription. The proxy holds the keys, polishes the text,
+ * enforces limits, and records usage.
  *
  * Flow per recording session:
  *   1. ACTION_START → start MediaRecorder (MPEG-4/AAC), post foreground notification
- *   2. ACTION_STOP  → stop recorder, check weekly audio-word quota
- *   3. POST audio to Whisper → gpt-4o-mini polish pass (same as Electron)
- *   4. Increment audioWordsWeekly / allTimeAudioWords in Firestore directly
- *   5. Deliver text to FwAccessibilityService → clipboard fallback
- *   6. stopSelf()
+ *   2. ACTION_STOP  → stop recorder
+ *   3. Upload audio to api-transcribe.php (proxy)
+ *   4. Deliver returned text to FwAccessibilityService → clipboard fallback
+ *   5. stopSelf()
  */
 class MicService : LifecycleService() {
 
@@ -113,25 +113,11 @@ class MicService : LifecycleService() {
             }
 
             try {
-                // ── Quota check ──────────────────────────────────────────────
-                val profile = withContext(Dispatchers.IO) { app.profileRepo.getProfile(uid) }
-                val isFree  = profile?.plan != "pro"
-                // Live, admin-managed limit from config/limits (defaults if not yet loaded).
-                val audioLimit = app.limitsRepo.limits.value.audioWords
-                if (isFree && (profile?.audioWordsThisWeek ?: 0) >= audioLimit) {
-                    RecordingBus.emitError(
-                        "Weekly audio limit reached ($audioLimit words/week). Upgrade to Pro."
-                    )
-                    cleanup(file)
-                    return@launch
-                }
-
-                // ── Transcribe (Whisper → polish) ────────────────────────────
+                // Transcription, polish, limit enforcement and usage recording
+                // all happen on the proxy. We just upload the audio.
                 val result = withContext(Dispatchers.IO) { app.api.transcribe(file) }
 
-                // ── Deliver the text FIRST ───────────────────────────────────
-                // The dictated text is what the user is waiting for; never let
-                // a downstream usage-counter write block it.
+                // Deliver the text to the focused field.
                 RecordingBus.emitText(result.text)
                 withContext(Dispatchers.Main) {
                     val svc = FwAccessibilityService.instance
@@ -147,15 +133,13 @@ class MicService : LifecycleService() {
                     }
                 }
 
-                // ── Bump usage in Firestore (best-effort, errors logged) ─────
-                withContext(Dispatchers.IO) {
-                    app.profileRepo.incrementAudioWords(uid, result.words)
-                }
-
-            } catch (e: ApiClient.LimitExceededException) {
-                RecordingBus.emitError(e.message ?: "Limit reached")
+            } catch (e: ApiClient.LimitReachedException) {
+                RecordingBus.emitError(
+                    "Weekly dictation limit reached. Resets Monday — " +
+                        "open FlowWrite to upgrade to Pro for unlimited."
+                )
             } catch (e: ApiClient.ApiException) {
-                RecordingBus.emitError(e.message ?: "API error")
+                RecordingBus.emitError(e.message ?: "Transcription error")
             } catch (e: Exception) {
                 RecordingBus.emitError("Transcription failed: ${e.message}")
             } finally {

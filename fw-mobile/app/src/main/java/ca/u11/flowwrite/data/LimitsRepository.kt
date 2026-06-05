@@ -22,8 +22,8 @@ data class FreeLimits(
 
 /**
  * Live listener for [config/limits]. Auth-aware: attaches only after Firebase
- * Auth confirms a signed-in user (matches [ApiKeyRepository]'s pattern, so we
- * never get permission-denied on cold-start races).
+ * Auth confirms a signed-in user (auth-aware listener pattern), so we never
+ * get permission-denied on cold-start races.
  *
  * Server-side enforcement remains authoritative; the values here drive the UI
  * (usage bars, "approaching limit" messaging) and the optional client-side

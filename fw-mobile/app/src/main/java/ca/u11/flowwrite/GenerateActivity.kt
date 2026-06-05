@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -66,6 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import ca.u11.flowwrite.data.ApiClient
+import ca.u11.flowwrite.data.BillingLauncher
 import ca.u11.flowwrite.data.PromptBuilder
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.service.FwAccessibilityService
@@ -151,6 +154,21 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    // --- Free-plan limit lockout -------------------------------------------
+
+    /** Non-null when the user hit a free-plan limit and must upgrade. */
+    private val _limitReached = MutableStateFlow<LimitKind?>(null)
+    val limitReached: StateFlow<LimitKind?> = _limitReached.asStateFlow()
+
+    val userUid: String   get() = fwApp.auth.currentUser?.uid ?: ""
+    val userEmail: String get() = fwApp.auth.currentUser?.email ?: ""
+
+    fun clearLimit() { _limitReached.value = null }
+
+    // NOTE: limit ENFORCEMENT is server-side. We surface [_limitReached] only
+    // when the proxy returns 402 (ApiClient.LimitReachedException). The app
+    // does not pre-check, count, or write usage itself.
+
     // --- In-panel dictation -------------------------------------------------
 
     /** The user's topic text. Bound to the panel's "Your text" field. */
@@ -218,16 +236,13 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
             _isTranscribing.value = true
             _error.value = null
             try {
+                // The proxy transcribes, polishes, enforces limits and records
+                // usage. We just send the audio and use the returned text.
                 val result = withContext(kotlinx.coroutines.Dispatchers.IO) { fwApp.api.transcribe(file) }
-                // Append the transcript to whatever is already in the draft
                 val cur = _draft.value.trim()
                 _draft.value = if (cur.isEmpty()) result.text else "$cur ${result.text}"
-                val uid = fwApp.auth.currentUser?.uid
-                if (uid != null) {
-                    withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        fwApp.profileRepo.incrementAudioWords(uid, result.words)
-                    }
-                }
+            } catch (e: ApiClient.LimitReachedException) {
+                _limitReached.value = LimitKind.AUDIO_WORDS
             } catch (e: Exception) {
                 _error.value = e.message ?: "Transcription failed"
             } finally {
@@ -273,9 +288,11 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = null
             _result.value = null
             try {
+                // The proxy enforces limits and records usage; on 402 it throws
+                // LimitReachedException, which we turn into the upgrade screen.
                 _result.value = block()
-                val uid = fwApp.auth.currentUser?.uid
-                if (uid != null) fwApp.profileRepo.incrementGeneration(uid)
+            } catch (e: ApiClient.LimitReachedException) {
+                _limitReached.value = LimitKind.GENERATIONS
             } catch (e: Exception) {
                 _error.value = e.message ?: "Generation failed"
             } finally {
@@ -286,6 +303,9 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
 
     fun clearResult() { _result.value = null; _error.value = null }
 }
+
+/** Which free-plan limit was hit. */
+enum class LimitKind { GENERATIONS, AUDIO_WORDS }
 
 // ---------------------------------------------------------------------------
 // UI
@@ -301,7 +321,9 @@ private fun GenerateSheet(vm: GenerateViewModel, onDone: () -> Unit) {
     val draft          by vm.draft.collectAsState()
     val isRecording    by vm.isRecording.collectAsState()
     val isTranscribing by vm.isTranscribing.collectAsState()
+    val limitReached   by vm.limitReached.collectAsState()
 
+    val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Desktop-style controls
@@ -333,6 +355,17 @@ private fun GenerateSheet(vm: GenerateViewModel, onDone: () -> Unit) {
             Spacer(Modifier.height(12.dp))
 
             when {
+                limitReached != null -> {
+                    LimitReachedSection(
+                        kind = limitReached!!,
+                        onUpgrade = {
+                            BillingLauncher.openCheckout(context, vm.userUid, vm.userEmail)
+                            onDone()
+                        },
+                        onLater = onDone,
+                    )
+                }
+
                 result != null -> {
                     ResultSection(
                         result = result!!,
@@ -589,6 +622,51 @@ private fun TemplateRow(template: Template, isGenerating: Boolean, onUse: () -> 
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
             ) { Text("Use", style = MaterialTheme.typography.labelMedium) }
         }
+    }
+}
+
+@Composable
+private fun LimitReachedSection(
+    kind: LimitKind,
+    onUpgrade: () -> Unit,
+    onLater: () -> Unit,
+) {
+    val what = when (kind) {
+        LimitKind.GENERATIONS -> "generations"
+        LimitKind.AUDIO_WORDS -> "dictated words"
+    }
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.Star, null, tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Weekly free limit reached",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "You've used all of your free $what this week. It resets Monday — " +
+                "or go Pro for unlimited generations and dictation.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = onUpgrade,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+        ) {
+            Icon(Icons.Filled.Star, null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Upgrade to Pro")
+        }
+        TextButton(onClick = onLater, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+            Text("Maybe later")
+        }
+        Spacer(Modifier.height(4.dp))
     }
 }
 

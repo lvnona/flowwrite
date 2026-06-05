@@ -18,11 +18,11 @@ import java.time.temporal.WeekFields
  * Firestore access for the users/{uid} document.
  *
  * - [userProfileFlow] — real-time listener (used by MainViewModel for the UI)
- * - [getProfile]      — one-shot read (used by MicService for limit checks)
- * - [incrementGeneration] / [incrementAudioWords] — atomic field increments
+ * - [getProfile]      — one-shot read
+ * - [ensureUserDoc]   — creates the doc on first sign-in
  *
- * Schema matches the Electron desktop app exactly so weekly quotas are
- * unified across all devices.
+ * Read-only with respect to usage: the server proxy writes all usage counters.
+ * The app only reads them here for display.
  */
 class ProfileRepository {
 
@@ -111,49 +111,10 @@ class ProfileRepository {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Usage increments — atomic, same fields as the Electron app writes
-    // -----------------------------------------------------------------------
-
-    /**
-     * Increments generation counters after a successful AI text generation.
-     * Mirrors the Electron app's bumpGenerations() / usageTracking.js.
-     */
-    suspend fun incrementGeneration(uid: String) {
-        val weekKey  = thisWeekKey()
-        val monthKey = thisMonthKey()
-        try {
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "usageWeekly.$weekKey" to FieldValue.increment(1L),
-                    "usage.$monthKey"      to FieldValue.increment(1L),
-                    "allTimeUsage"         to FieldValue.increment(1L),
-                )
-            ).await()
-        } catch (e: Exception) {
-            Log.e(TAG, "incrementGeneration($uid) failed: ${e.message}", e)
-        }
-    }
-
-    /**
-     * Increments audio-word counters after a successful Whisper transcription.
-     * Mirrors the Electron app's bumpTranscriberStats().
-     */
-    suspend fun incrementAudioWords(uid: String, wordCount: Int) {
-        val weekKey  = thisWeekKey()
-        val monthKey = thisMonthKey()
-        try {
-            db.collection("users").document(uid).update(
-                mapOf(
-                    "audioWordsWeekly.$weekKey" to FieldValue.increment(wordCount.toLong()),
-                    "audioWords.$monthKey"      to FieldValue.increment(wordCount.toLong()),
-                    "allTimeAudioWords"         to FieldValue.increment(wordCount.toLong()),
-                )
-            ).await()
-        } catch (e: Exception) {
-            Log.e(TAG, "incrementAudioWords($uid, $wordCount) failed: ${e.message}", e)
-        }
-    }
+    // NOTE: Usage counting is NOT done here anymore. The server proxy
+    // (api-generate.php / api-transcribe.php) enforces limits and writes
+    // usageWeekly / audioWordsWeekly / allTime* after each successful call.
+    // The app only READS those fields (via [userProfileFlow]) for display.
 }
 
 // ---------------------------------------------------------------------------

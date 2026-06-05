@@ -5,6 +5,25 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.12 — versionCode 13 (2026-06-01)
+
+### Security / architecture
+- **All AI calls now go through the server proxy** (`api-generate.php` /
+  `api-transcribe.php` on flowwrite.u11.ca), authenticated with the user's
+  Firebase ID token. The app **no longer contacts OpenAI / Anthropic /
+  DeepSeek directly** and **no longer reads `config/apiKeys`** — API keys
+  can never be extracted from the client anymore.
+- **Limit enforcement + usage counting moved server-side.** The app no
+  longer pre-checks limits or writes usage counters (no double-counting);
+  it shows the upgrade screen when the proxy returns HTTP 402.
+- Prompt building (templates, additional instructions, tone, length,
+  translate) is unchanged — the app still composes the prompt and sends
+  the final string to the proxy.
+- Removed `ApiKeyRepository` / `ApiKeys`; `config/limits` is still read
+  for the dashboard's "X / N used" denominator only.
+
+---
+
 ## 1.0.11 — versionCode 12 (2026-06-01)
 
 ### Fixed (Google Play sensitive-permission compliance)

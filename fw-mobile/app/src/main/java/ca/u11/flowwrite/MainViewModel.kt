@@ -5,7 +5,6 @@ import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import ca.u11.flowwrite.data.ApiKeys
 import ca.u11.flowwrite.data.FreeLimits
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.data.UserProfile
@@ -71,13 +70,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val signInError: StateFlow<String?> = _signInError.asStateFlow()
 
     // -----------------------------------------------------------------------
-    // Exposed state — API keys (provider info for Settings tab)
-    // -----------------------------------------------------------------------
-
-    val apiKeys: StateFlow<ApiKeys> = fwApp.apiKeyRepo.keys
-
-    // -----------------------------------------------------------------------
-    // Live free-plan limits (admin-managed at config/limits)
+    // Live free-plan limits (admin-managed at config/limits) — DISPLAY only.
+    // The server enforces; we just show the "X / N used" denominator.
     // -----------------------------------------------------------------------
 
     val limits: StateFlow<FreeLimits> = fwApp.limitsRepo.limits
@@ -88,20 +82,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _templates = MutableStateFlow<List<Template>>(emptyList())
     val templates: StateFlow<List<Template>> = _templates.asStateFlow()
-
-    // -----------------------------------------------------------------------
-    // Exposed state — text generation (Templates tab)
-    // -----------------------------------------------------------------------
-
-    private val _isGenerating = MutableStateFlow(false)
-    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
-
-    /** Non-null when a generation result is ready to display. */
-    private val _generateResult = MutableStateFlow<String?>(null)
-    val generateResult: StateFlow<String?> = _generateResult.asStateFlow()
-
-    private val _generateError = MutableStateFlow<String?>(null)
-    val generateError: StateFlow<String?> = _generateError.asStateFlow()
 
     // -----------------------------------------------------------------------
     // Init
@@ -159,11 +139,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         auth.signOut()
 
         // Clear all per-user in-memory state so the next sign-in starts clean
-        // (no stale templates / generation result flashing through).
-        _profile.value         = null
-        _templates.value       = emptyList()
-        _generateResult.value  = null
-        _generateError.value   = null
+        // (no stale templates flashing through).
+        _profile.value   = null
+        _templates.value = emptyList()
 
         _screen.value = AppScreen.SignIn
     }
@@ -182,37 +160,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun permissionsComplete() {
         prefs.edit().putBoolean("permissions_seen", true).apply()
         _screen.value = AppScreen.Home
-    }
-
-    // -----------------------------------------------------------------------
-    // Text generation
-    // -----------------------------------------------------------------------
-
-    fun generateText(prompt: String) {
-        if (_isGenerating.value) return
-        viewModelScope.launch {
-            _isGenerating.value  = true
-            _generateError.value = null
-            _generateResult.value = null
-            try {
-                val result = api.generate(prompt)
-                _generateResult.value = result.text
-                // Increment generation counter in Firestore
-                val uid = auth.currentUser?.uid
-                if (uid != null) {
-                    profileRepo.incrementGeneration(uid)
-                }
-            } catch (e: Exception) {
-                _generateError.value = e.message ?: "Generation failed"
-            } finally {
-                _isGenerating.value = false
-            }
-        }
-    }
-
-    fun clearGenerateResult() {
-        _generateResult.value = null
-        _generateError.value  = null
     }
 
     // -----------------------------------------------------------------------

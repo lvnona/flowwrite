@@ -6,7 +6,6 @@ import android.app.NotificationManager
 import android.content.Context
 import ca.u11.flowwrite.auth.AuthRepository
 import ca.u11.flowwrite.data.ApiClient
-import ca.u11.flowwrite.data.ApiKeyRepository
 import ca.u11.flowwrite.data.LimitsRepository
 import ca.u11.flowwrite.data.ProfileRepository
 import ca.u11.flowwrite.data.TemplateRepository
@@ -22,17 +21,15 @@ import ca.u11.flowwrite.data.TemplateRepository
 class FlowWriteApp : Application() {
 
     val auth         by lazy { AuthRepository(this) }
-    val apiKeyRepo   by lazy { ApiKeyRepository() }
-    val api          by lazy { ApiClient(apiKeyRepo) }
+    val api          by lazy { ApiClient(auth) }
     val profileRepo  by lazy { ProfileRepository() }
     val templateRepo by lazy { TemplateRepository() }
     val limitsRepo   by lazy { LimitsRepository() }
 
     override fun onCreate() {
         super.onCreate()
-        // Start listening to config docs immediately — same as the Electron
-        // app's onSnapshot in App.jsx. Both are ready before the first API call.
-        apiKeyRepo.startListening()
+        // config/limits is read live only to DISPLAY the "X / N used" denominator;
+        // the server enforces the actual limits. API keys are never read here.
         limitsRepo.startListening()
         createNotificationChannels()
     }

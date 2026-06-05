@@ -2,9 +2,8 @@ package ca.u11.flowwrite.data
 
 /**
  * Snapshot of the Firestore users/{uid} document, shaped for the UI.
- * Matches the schema written by both the Electron desktop app (usageTracking.js)
- * and the PHP mobile proxy (mobile-generate.php / mobile-transcribe.php) so that
- * weekly quotas are unified across devices.
+ * The server proxy writes these fields (plan, weekly/all-time usage); the app
+ * only reads them for display, so quotas stay unified across all devices.
  */
 data class UserProfile(
     val uid: String,
@@ -19,4 +18,7 @@ data class UserProfile(
     val audioWordsThisWeek: Int = 0,
     val allTimeUsage: Int = 0,
     val allTimeAudioWords: Int = 0,
-)
+) {
+    /** Paid plans (unlimited usage). Free is everything else. */
+    val isPro: Boolean get() = plan == "pro" || plan == "team"
+}
