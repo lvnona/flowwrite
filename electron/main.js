@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import https from 'node:https';
 import Store from 'electron-store';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI, { toFile } from 'openai';
@@ -377,8 +376,7 @@ function startWindowsPtt() {
 
 // Recreate the dictation overlay if it was never created or got destroyed
 // (Electron can tear down a transparent/hidden window if its render process
-// dies — e.g. after a GPU restart). Self-healing so pressing the key can never
-// crash on a stale, destroyed window reference.
+// dies). Self-healing so pressing the key can never crash on a stale window.
 function ensureDictationWindow() {
   if (!dictationWindow || dictationWindow.isDestroyed()) {
     dictationWindow = createDictationWindow();
@@ -395,8 +393,6 @@ function onFnDown() {
   dictating = true;
   dictationStart = Date.now();
   showDictationBar(win);
-  // If we just recreated the window its renderer may still be loading; wait for
-  // it before sending the start signal so the first dictation isn't lost.
   const sendStart = () => { try { win.webContents.send('dictation:start'); } catch { /* ignore */ } };
   if (win.webContents.isLoading()) win.webContents.once('did-finish-load', sendStart);
   else sendStart();
@@ -1077,119 +1073,108 @@ ipcMain.handle('google-sign-in', async (_event, { clientId, clientSecret } = {})
  * Text chunks are pushed to the renderer window via `generate:chunk` events
  * so claudeClient.js can stream them into the popup.
  */
-// ── Server-routed AI (single source of truth) ─────────────────────────────────
-// All generation + transcription goes through the server (flowwrite.u11.ca),
-// which authenticates the user, enforces the weekly limits, calls the AI with
-// the admin key (never shipped to the app), and records usage in Firebase. The
-// desktop no longer talks to the AI directly or counts usage locally — the
-// server is authoritative for every platform.
-const FW_SERVER = 'https://flowwrite.u11.ca';
-
-// The authed main-window renderer pushes a fresh Firebase ID token here so the
-// main process can prove who's calling. Tokens last ~1h; the renderer refreshes.
-let fwIdToken = '';
-ipcMain.handle('set-id-token', (_e, token) => {
-  fwIdToken = (typeof token === 'string') ? token : '';
-  return { ok: true };
-});
-
-// Get a usable token: the pushed one if present, otherwise ask the authed main
-// window for a fresh one right now (covers cold-start / token expiry so the
-// dictation bar — which has no auth context of its own — always works).
-async function getServerToken() {
-  if (fwIdToken) return fwIdToken;
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      const t = await win.webContents.executeJavaScript(
-        'window.__fwIdToken ? window.__fwIdToken() : null', true,
-      );
-      if (t && typeof t === 'string') { fwIdToken = t; return t; }
-    } catch { /* try next window */ }
-  }
-  return '';
-}
-
-// ── HTTP via Node's https module (reliable in the packaged main process; avoids
-// any ambiguity around global fetch / FormData / Blob in Electron). ──────────
-function serverPostJson(path, obj, token) {
-  return new Promise((resolve, reject) => {
-    const data = Buffer.from(JSON.stringify(obj));
-    const req = https.request(`${FW_SERVER}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': data.length,
-        Authorization: `Bearer ${token}`,
-      },
-    }, (res) => {
-      let body = '';
-      res.on('data', (c) => { body += c; });
-      res.on('end', () => resolve({ status: res.statusCode, body }));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
-}
-
-function serverPostMultipart(path, token, fields, fileField, buffer, filename, mime) {
-  return new Promise((resolve, reject) => {
-    const boundary = '----FlowWrite' + Math.random().toString(36).slice(2);
-    const parts = [];
-    for (const [k, v] of Object.entries(fields)) {
-      parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`);
-    }
-    parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; `
-      + `filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`);
-    const head = Buffer.from(parts.join(''), 'utf8');
-    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
-    const payload = Buffer.concat([head, buffer, tail]);
-    const req = https.request(`${FW_SERVER}${path}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': payload.length,
-        Authorization: `Bearer ${token}`,
-      },
-    }, (res) => {
-      let body = '';
-      res.on('data', (c) => { body += c; });
-      res.on('end', () => resolve({ status: res.statusCode, body }));
-    });
-    req.on('error', reject);
-    req.write(payload);
-    req.end();
-  });
-}
-
 ipcMain.handle('generate-text', async (event, { prompt }) => {
-  const token = await getServerToken();
-  if (!token) {
-    return { ok: false, error: 'Please open the FlowWrite window and sign in, then try again.' };
+  const keys     = store.get('apiKeys') || {};
+  const provider = keys.popupProvider || 'claude';
+
+  // ── Free-tier weekly limit (per-account) ──────────────────────────────────
+  if (!isUnlimited() && cloudGenerations() >= FREE_LIMITS.generationsPerWeek) {
+    return {
+      ok: false,
+      limitReached: 'generations',
+      error: `You've used all ${FREE_LIMITS.generationsPerWeek} free generations this week.`,
+    };
   }
-  try {
-    const { status, body } = await serverPostJson('/api-generate.php', { prompt }, token);
-    let data = {};
-    try { data = JSON.parse(body); } catch { /* non-JSON body */ }
-    if (status === 402) {
-      return {
-        ok: false,
-        limitReached: 'generations',
-        error: `You've used all ${data.limit ?? ''} free generations this week.`,
-      };
+
+  // ── Claude (Anthropic) path ──────────────────────────────────────────────
+  if (provider === 'claude') {
+    const apiKey = keys.anthropic || store.get('settings').anthropicApiKey;
+    if (!apiKey) {
+      return { ok: false, error: 'Anthropic API key is not configured. Please ask the administrator to add it in the API Keys settings.' };
     }
-    if (status !== 200 || !data.ok) {
-      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
+    try {
+      const client = new Anthropic({ apiKey });
+      const stream = client.messages.stream({
+        model: 'claude-opus-4-5',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      });
+      let full = '';
+      for await (const chunk of stream) {
+        if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+          const text = chunk.delta.text;
+          full += text;
+          event.sender.send('generate:chunk', text);
+        }
+      }
+      bumpGenerations();
+      return { ok: true, text: full };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
     }
-    // The server returns the full text (not streamed). Emit it as one chunk so
-    // the popup's existing streaming UI renders it.
-    const text = data.text || '';
-    event.sender.send('generate:chunk', text);
-    return { ok: true, text };
-  } catch (err) {
-    return { ok: false, error: err.message || String(err) };
   }
+
+  // ── OpenAI path ──────────────────────────────────────────────────────────
+  if (provider === 'openai') {
+    const apiKey = keys.openaiPopup;
+    if (!apiKey) {
+      return { ok: false, error: 'OpenAI API key for popup is not configured. Please ask the administrator to add it in the API Keys settings.' };
+    }
+    const model = keys.openaiPopupModel || 'gpt-4o';
+    try {
+      const client = new OpenAI({ apiKey });
+      const stream = await client.chat.completions.create({
+        model,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+        stream: true,
+      });
+      let full = '';
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (text) {
+          full += text;
+          event.sender.send('generate:chunk', text);
+        }
+      }
+      bumpGenerations();
+      return { ok: true, text: full };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  // ── DeepSeek path (OpenAI-compatible API) ────────────────────────────────
+  if (provider === 'deepseek') {
+    const apiKey = keys.deepseek;
+    if (!apiKey) {
+      return { ok: false, error: 'DeepSeek API key is not configured. Please ask the administrator to add it in the API Keys settings.' };
+    }
+    const model = keys.deepseekModel || 'deepseek-v4-flash';
+    try {
+      const client = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' });
+      const stream = await client.chat.completions.create({
+        model,
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+        stream: true,
+      });
+      let full = '';
+      for await (const chunk of stream) {
+        const text = chunk.choices[0]?.delta?.content || '';
+        if (text) {
+          full += text;
+          event.sender.send('generate:chunk', text);
+        }
+      }
+      bumpGenerations();
+      return { ok: true, text: full };
+    } catch (err) {
+      return { ok: false, error: err.message || String(err) };
+    }
+  }
+
+  return { ok: false, error: `Unknown popup provider: "${provider}". Set it to "claude", "openai" or "deepseek" in the API Keys settings.` };
 });
 
 ipcMain.handle('autofill-text', async (_e, { text, targetField }) => {
@@ -1274,53 +1259,67 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
   if (settings.transcriberEnabled === false) {
     return { ok: false, error: 'Audio transcriber is turned off in Settings.' };
   }
-  const token = await getServerToken();
-  if (!token) {
-    return { ok: false, error: 'Please open the FlowWrite window and sign in, then try again.' };
+  // Free-tier weekly dictation limit (per-account; resets each ISO week).
+  if (!isUnlimited() && cloudAudioWords() >= FREE_LIMITS.audioWordsPerWeek) {
+    return {
+      ok: false,
+      limitReached: 'audio',
+      error: `You've used all ${FREE_LIMITS.audioWordsPerWeek} free dictated words this week.`,
+    };
+  }
+  const openaiKey = store.get('apiKeys')?.openai || settings.openaiApiKey;
+  if (!openaiKey) {
+    return {
+      ok: false,
+      error: 'Voice transcription isn\'t configured yet. Please contact the administrator.',
+    };
   }
   if (!audio || audio.byteLength === 0) {
     return { ok: false, error: 'No audio captured. Try holding the mic a little longer.' };
   }
 
   try {
+    const openai = new OpenAI({ apiKey: openaiKey });
     const buffer = Buffer.from(audio);
     const ext = (mimeType || '').includes('mp4') ? 'mp4'
       : (mimeType || '').includes('wav') ? 'wav'
       : (mimeType || '').includes('ogg') ? 'ogg'
       : 'webm';
+    const file = await toFile(buffer, `dictation.${ext}`, { type: mimeType || 'audio/webm' });
 
-    // Upload to the server, which enforces the word limit, transcribes with the
-    // admin Whisper key, counts the words, and records them in Firebase.
-    const { status, body } = await serverPostMultipart(
-      '/api-transcribe.php', token,
-      { polish: settings.polishDictation === false ? '0' : '1' },
-      'audio', buffer, `dictation.${ext}`, mimeType || 'audio/webm',
-    );
-    let data = {};
-    try { data = JSON.parse(body); } catch { /* non-JSON body */ }
-    if (status === 402) {
-      return {
-        ok: false,
-        limitReached: 'audio',
-        error: `You've used all ${data.limit ?? ''} free dictated words this week.`,
-      };
-    }
-    if (status !== 200 || !data.ok) {
-      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
+    const transcription = await openai.audio.transcriptions.create({
+      file,
+      model: 'whisper-1',
+    });
+
+    let text = (transcription.text || '').trim();
+    if (text && settings.polishDictation !== false) {
+      const cleaned = await polishDictation(openai, text);
+      if (cleaned) text = cleaned;
     }
 
-    const text = (data.text || '').trim();
-    // Keep ONLY a local display stat for Settings → Audio transcriber. The
-    // authoritative per-account count lives in Firebase, written by the server
-    // — so we do NOT bump any cloud counter here (that would double-count).
-    if (text && data.words) {
+    // Track words transcribed (shown in Settings → Audio transcriber + the
+    // Dashboard). Counted here in the main process so EVERY dictation source
+    // (popup mic + the Fn dictation bar) is included regardless of auth state.
+    if (text) {
+      const n = text.split(/\s+/).filter(Boolean).length;
       const stats = store.get('transcriberStats') || { words: 0, weekly: {}, monthly: {} };
-      stats.words = (stats.words || 0) + data.words;
+      stats.words = (stats.words || 0) + n;
       stats.weekly = stats.weekly || {};
       stats.monthly = stats.monthly || {};
-      stats.weekly[isoWeekKey()] = (stats.weekly[isoWeekKey()] || 0) + data.words;
-      stats.monthly[monthKey()] = (stats.monthly[monthKey()] || 0) + data.words;
+      const wk = isoWeekKey();
+      const mo = monthKey();
+      stats.weekly[wk] = (stats.weekly[wk] || 0) + n;
+      stats.monthly[mo] = (stats.monthly[mo] || 0) + n;
       store.set('transcriberStats', stats);
+
+      // Per-account: optimistic bump + route the count to the (authed) main
+      // window so it writes to the user's cloud profile. This covers ALL
+      // dictation — popup mic AND the Fn/PTT bar — exactly once.
+      bumpCloudAudioWords(n);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('usage:audio-words', n);
+      }
     }
 
     return { ok: true, text };

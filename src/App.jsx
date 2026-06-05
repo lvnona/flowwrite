@@ -23,7 +23,7 @@ import Onboarding from './components/Onboarding.jsx';
 
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useAuth } from './hooks/useAuth.js';
-import { getFirebaseFirestore, getFirebaseAuth } from './utils/firebase.js';
+import { getFirebaseFirestore } from './utils/firebase.js';
 import { isConfigured } from './utils/firebaseConfig.js';
 import { thisWeekKey, incrementAudioWords } from './utils/usageTracking.js';
 
@@ -85,32 +85,6 @@ export default function App() {
       .catch(() => setOnboarded(true));
   }, [route]);
 
-  // Push a fresh Firebase ID token to the main process so it can call the
-  // server (which enforces limits + holds the AI keys) on behalf of this user.
-  // Tokens last ~1h; refresh well before that, on focus, and clear on sign-out.
-  useEffect(() => {
-    if (route === 'dictation') return undefined;
-    // Let the main process pull a fresh token on demand (used as a fallback when
-    // the pushed one is missing/expired — e.g. the dictation bar at cold start).
-    window.__fwIdToken = async () => {
-      try { return (await getFirebaseAuth()?.currentUser?.getIdToken?.()) || null; }
-      catch { return null; }
-    };
-    if (!user) { window.flowwrite?.setIdToken?.(''); return undefined; }
-    let cancelled = false;
-    const push = async () => {
-      try {
-        const t = await getFirebaseAuth()?.currentUser?.getIdToken?.();
-        if (!cancelled && t) window.flowwrite?.setIdToken?.(t);
-      } catch { /* ignore */ }
-    };
-    push();
-    const id = setInterval(push, 25 * 60 * 1000);
-    const onFocus = () => push();
-    window.addEventListener('focus', onFocus);
-    return () => { cancelled = true; clearInterval(id); window.removeEventListener('focus', onFocus); };
-  }, [user, route]);
-
   // Push the signed-in user's plan + this week's PER-ACCOUNT usage into the main
   // process so it can enforce the free-tier weekly limits across devices. Skip
   // the dictation window (no auth context).
@@ -151,11 +125,38 @@ export default function App() {
     };
   }, []);
 
-  // NOTE: the desktop no longer reads config/apiKeys. AI keys live ONLY on the
-  // server now — the app calls flowwrite.u11.ca/api-generate.php and
-  // api-transcribe.php, which hold the keys and never expose them to clients.
-  // (config/apiKeys will be locked to admin-only read once every platform has
-  // migrated off direct AI calls.)
+  // Sync admin-managed API keys from Firestore into the main process so Claude
+  // generation + Whisper transcription work without customers entering keys.
+  // Runs in both the main window AND the popup window (which is auth-gated so
+  // the user is always signed in).  The dictation window is excluded because
+  // it renders before auth and has no Firebase auth context.
+  useEffect(() => {
+    if (!user || !isConfigured()) return undefined;
+    if (route === 'dictation') return undefined; // dictation has no auth context
+    let unsub = () => {};
+    try {
+      const db = getFirebaseFirestore();
+      unsub = onSnapshot(
+        doc(db, 'config', 'apiKeys'),
+        (snap) => {
+          const d = snap.exists() ? snap.data() : {};
+          window.flowwrite?.setApiKeys?.({
+            popupProvider:    d.popupProvider    || 'claude',
+            anthropic:        d.anthropic        || '',
+            openaiPopup:      d.openaiPopup      || '',
+            openaiPopupModel: d.openaiPopupModel || 'gpt-4o',
+            deepseek:         d.deepseek         || '',
+            deepseekModel:    d.deepseekModel    || 'deepseek-v4-flash',
+            openai:           d.openai           || '',
+          });
+        },
+        () => {},
+      );
+    } catch {
+      /* ignore */
+    }
+    return () => unsub();
+  }, [user, route]);
 
   // Admin-managed free-plan weekly limits (config/limits). Same pattern as
   // apiKeys: subscribe in main + popup, push to the main process so its
