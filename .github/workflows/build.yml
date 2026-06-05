@@ -96,9 +96,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: FlowWrite-win
-          # .exe = installer/manual download; latest.yml + .blockmap = auto-update feed.
+          # .exe = installer/manual download; .zip = portable version (no install
+          # needed, runs from any folder — useful for locked-down work PCs);
+          # latest.yml + .blockmap = auto-update feed for the installer.
           path: |
             dist/FlowWrite-win-setup.exe
+            dist/FlowWrite-win-portable.zip
             dist/latest.yml
             dist/*.blockmap
           retention-days: 30
@@ -133,27 +136,37 @@ jobs:
             | Platform | File |
             |----------|------|
             | macOS (Apple Silicon) | [FlowWrite-mac.dmg](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-mac.dmg) |
-            | Windows 64-bit | [FlowWrite-win-setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-setup.exe) |
+            | Windows 64-bit (installer) | [FlowWrite-win-setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-setup.exe) |
+            | Windows 64-bit (portable, no install) | [FlowWrite-win-portable.zip](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-portable.zip) |
 
             > **These URLs always point to the latest version.**
 
             **🔄 Automatic updates:** once installed, FlowWrite updates itself in
             the background and installs the new version on the next restart — no
-            need to re-download after this first install.
+            need to re-download after this first install. (Auto-update applies to
+            the installer version only; for the portable zip, just download a
+            new copy when there's an update.)
 
             ### macOS install
             1. Download and open `FlowWrite-mac.dmg`
             2. Drag FlowWrite to Applications and launch it (signed & notarized — opens with no warning)
 
-            ### Windows install
+            ### Windows install (normal)
             1. Download and run `FlowWrite-win-setup.exe`
             2. Choose install directory, then launch from Start menu
+
+            ### Windows portable (locked-down PCs / no admin rights)
+            1. Download `FlowWrite-win-portable.zip`
+            2. Extract anywhere (Desktop, USB stick, OneDrive — your choice)
+            3. Open the extracted folder and double-click `FlowWrite.exe`
+            4. No installation, no admin rights needed. To "uninstall" — just delete the folder.
           draft: false
           prerelease: false
           files: |
             release-assets/FlowWrite-mac.dmg
             release-assets/FlowWrite-mac.zip
             release-assets/FlowWrite-win-setup.exe
+            release-assets/FlowWrite-win-portable.zip
             release-assets/latest-mac.yml
             release-assets/latest.yml
             release-assets/*.blockmap

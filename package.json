@@ -1,6 +1,6 @@
 {
   "name": "flowwrite",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "description": "AI writing assistant that lives in your system tray and helps fill any text field with Claude-generated content.",
   "main": "electron/main.js",
   "type": "module",
@@ -86,9 +86,22 @@
       "artifactName": "FlowWrite-mac.${ext}"
     },
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "public/icons/app-icon.ico",
-      "artifactName": "FlowWrite-win-setup.${ext}"
+      "artifactName": "FlowWrite-win-portable.${ext}"
     },
     "nsis": {
       "oneClick": false,
