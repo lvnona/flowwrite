@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // Admin-managed free-plan weekly limits (read from Firestore, pushed here).
   setLimits: (l) => ipcRenderer.invoke('set-limits', l),
 
+  // Fresh Firebase ID token, pushed by the authed renderer so the main process
+  // can call the server (which enforces limits + holds the AI keys).
+  setIdToken: (token) => ipcRenderer.invoke('set-id-token', token),
+
   // History
   getHistory: () => ipcRenderer.invoke('get-history'),
   addHistory: (entry) => ipcRenderer.invoke('add-history', entry),

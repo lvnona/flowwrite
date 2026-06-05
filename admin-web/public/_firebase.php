@@ -143,6 +143,83 @@ function fw_typed($v) {
   return ['stringValue' => (string)$v];
 }
 
+// ── Usage counters: atomic increment (server is the source of truth) ──────────
+
+// ISO-8601 week key + month key, in UTC. Single canonical definition the server
+// uses everywhere it reads or writes usage, so counts never disagree. e.g.
+// "2026-W23" / "2026-06".
+function fw_iso_week()  { return gmdate('o') . '-W' . gmdate('W'); }
+// NOTE: fw_month_key() intentionally lives in _mobile.php (the older mobile
+// island defines it). Endpoints that only include _firebase.php use
+// gmdate('Y-m') inline to avoid a redeclare when both files are loaded.
+
+// Escape a Firestore field path so map keys that aren't simple identifiers stay
+// a SINGLE key, not a nested path. A week key like "2026-W23" has a hyphen and a
+// leading digit, so "usageWeekly.2026-W23" must become "usageWeekly.`2026-W23`"
+// or Firestore reads it as usageWeekly → 2026 → ...
+function fw_escape_field_path($path) {
+  $out = [];
+  foreach (explode('.', $path) as $seg) {
+    $out[] = preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $seg)
+      ? $seg
+      : '`' . str_replace(['\\', '`'], ['\\\\', '\\`'], $seg) . '`';
+  }
+  return implode('.', $out);
+}
+
+/**
+ * Atomically increment numeric usage fields on users/{uid}, optionally also
+ * setting a few plain fields (e.g. lastSeen), in ONE Firestore commit. Field
+ * transforms mean concurrent calls from multiple devices never lose a count.
+ *
+ * Keys in $incs are RAW dotted paths (e.g. "usageWeekly.2026-W23"); the map
+ * segments are auto-escaped here, so callers never pre-escape.
+ *
+ * @param array $incs  [ "dotted.path" => intDelta ]
+ * @param array $sets  [ topLevelField => value ]   e.g. ['lastSeen' => ms]
+ */
+function fw_increment_user($cfg, $uid, $incs, $sets = []) {
+  list($token, $project) = fw_google_token($cfg['service_account_path']);
+  $docName = "projects/$project/databases/(default)/documents/users/$uid";
+
+  $transforms = [];
+  foreach ($incs as $path => $delta) {
+    $transforms[] = [
+      'fieldPath' => fw_escape_field_path($path),
+      'increment' => ['integerValue' => (string)(int)$delta],
+    ];
+  }
+
+  if (!empty($sets)) {
+    // update (plain sets like lastSeen) + updateTransforms (the increments).
+    $fields = []; $mask = [];
+    foreach ($sets as $k => $v) { $fields[$k] = fw_typed($v); $mask[] = $k; }
+    $write = [
+      'update'           => ['name' => $docName, 'fields' => $fields],
+      'updateMask'       => ['fieldPaths' => $mask],
+      'updateTransforms' => $transforms,
+    ];
+  } else {
+    // transform-only (no plain field sets to apply).
+    $write = ['transform' => ['document' => $docName, 'fieldTransforms' => $transforms]];
+  }
+
+  $url = "https://firestore.googleapis.com/v1/projects/$project/databases/(default)/documents:commit";
+  list($code, $res) = fw_http('POST', $url, json_encode(['writes' => [$write]]), [
+    "Authorization: Bearer $token",
+    'Content-Type: application/json',
+  ]);
+  if ($code !== 200) throw new Exception("Increment failed ($code): $res");
+  return [$code, $res];
+}
+
+// Read a single integer usage value out of a typed user-doc fields array, for a
+// nested map field like usageWeekly.{week}. Returns 0 when absent.
+function fw_usage_value($fields, $mapField, $key) {
+  $v = $fields[$mapField]['mapValue']['fields'][$key]['integerValue'] ?? null;
+  return $v === null ? 0 : (int)$v;
+}
+
 // Patch specific fields on users/{uid}. $fields is an assoc (name => value).
 function fw_patch_user($cfg, $uid, $fields) {
   list($token, $project) = fw_google_token($cfg['service_account_path']);
@@ -160,51 +237,3 @@ function fw_patch_user($cfg, $uid, $fields) {
   return [$code, $res];
 }
 
-// Escape a Firestore field path so map keys that aren't simple identifiers are
-// treated as a single key, not a nested path. A key like "2026-W21" starts with
-// a digit and contains a hyphen, so "usageWeekly.2026-W21" must become
-// "usageWeekly.`2026-W21`" or Firestore reads it as usageWeekly → 2026 → ...
-function fw_escape_field_path($path) {
-  $out = [];
-  foreach (explode('.', $path) as $seg) {
-    if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', $seg)) {
-      $out[] = $seg;
-    } else {
-      $out[] = '`' . str_replace(['\\', '`'], ['\\\\', '\\`'], $seg) . '`';
-    }
-  }
-  return implode('.', $out);
-}
-
-// Atomically increment integer fields on users/{uid} using the Firestore commit
-// endpoint (server-side FieldValue.increment — no read-modify-write race).
-// $incs is an assoc of fieldPath => integer delta, e.g.
-//   [ 'usageWeekly.2026-W21' => 1, 'allTimeUsage' => 1 ]
-// Map-key segments are auto-escaped. The doc must already exist (callers
-// lazy-create it on first sign-in). Returns [httpCode, rawBody].
-function fw_increment_user($cfg, $uid, $incs) {
-  list($token, $project) = fw_google_token($cfg['service_account_path']);
-  $docName = "projects/$project/databases/(default)/documents/users/$uid";
-  $transforms = [];
-  foreach ($incs as $path => $delta) {
-    $transforms[] = [
-      'fieldPath' => fw_escape_field_path($path),
-      'increment' => ['integerValue' => (string)(int)$delta],
-    ];
-  }
-  $body = json_encode([
-    'writes' => [[
-      'transform' => [
-        'document'        => $docName,
-        'fieldTransforms' => $transforms,
-      ],
-    ]],
-  ]);
-  $url = "https://firestore.googleapis.com/v1/projects/$project/databases/(default)/documents:commit";
-  list($code, $res) = fw_http('POST', $url, $body, [
-    "Authorization: Bearer $token",
-    'Content-Type: application/json',
-  ]);
-  if ($code !== 200) throw new Exception("Increment failed ($code): $res");
-  return [$code, $res];
-}

@@ -22,11 +22,20 @@ service cloud.firestore {
 
       // Regular user: may update profile fields and usage counters only.
       // plan / status / expiresAt are admin-only.
+      //
+      // Use .get(field, default) so a MISSING field doesn't make the whole
+      // rule error out and deny the write. Legacy user docs created before
+      // expiresAt was added (e.g. early iOS builds) have no expiresAt at all;
+      // the strict `resource.data.expiresAt` reference errored on those docs,
+      // permanently blocking the owner from updating usage counters (403).
+      // Treating a missing field as its default keeps the SAME protection
+      // (the owner still can't change plan/status/expiresAt) while allowing
+      // usage increments on older docs.
       allow update: if
         (isOwner(userId)
-          && request.resource.data.plan      == resource.data.plan
-          && request.resource.data.status    == resource.data.status
-          && request.resource.data.expiresAt == resource.data.expiresAt)
+          && request.resource.data.get('plan', 'free')     == resource.data.get('plan', 'free')
+          && request.resource.data.get('status', 'active') == resource.data.get('status', 'active')
+          && request.resource.data.get('expiresAt', null)  == resource.data.get('expiresAt', null))
         || isAdmin();
 
       // Only admin can delete a user record.

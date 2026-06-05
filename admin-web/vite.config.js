@@ -5,9 +5,13 @@ import { dirname, resolve } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// The admin panel is a React SPA whose HTML entry is admin.html (served at
-// /admin on the host). The marketing landing page (public/index.html) is a
-// static file Vite copies verbatim to dist/ — it is NOT a Vite entry.
+// This project bundles TWO React SPAs:
+//   • admin.html  → /admin   — admin dashboard (restricted to admins).
+//   • app.html    → /app     — customer portal: every signed-in user sees
+//                              their own plan, usage and templates manager.
+//                              Mobile users open this from inside the app.
+// The marketing landing page (public/index.html) is a static file Vite copies
+// verbatim to dist/ — it is NOT a Vite entry.
 // Build output goes into dist/ — upload that folder to the host.
 export default defineConfig({
   plugins: [react()],
@@ -15,7 +19,10 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
     rollupOptions: {
-      input: resolve(__dirname, 'admin.html'),
+      input: {
+        admin: resolve(__dirname, 'admin.html'),
+        app:   resolve(__dirname, 'app.html'),
+      },
     },
   },
 });

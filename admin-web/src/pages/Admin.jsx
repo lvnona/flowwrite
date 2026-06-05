@@ -74,9 +74,11 @@ function fmtCost(n) {
   return `$${n.toFixed(2)}`;
 }
 
-// Stripe stores current_period_end as UNIX seconds.
+// Stripe stores current_period_end as UNIX seconds. Anything before 2010 is
+// almost certainly a sentinel / uninitialised value (Unix epoch 0 → 1 Jan 1970),
+// so render those as "—" rather than misleading the admin.
 function fmtPeriodEnd(sec) {
-  if (!sec) return '—';
+  if (!sec || sec < 1262304000) return '—'; // 2010-01-01
   return fmtDate(sec * 1000);
 }
 
@@ -96,7 +98,7 @@ export default function AdminPanel({ user }) {
     adminUids, addAdmin, removeAdmin,
     refresh, inviteUser, resendInvite, deleteInvite,
     updatePlan, updateStatus, updateExpiry, deleteUser,
-    resetFreeWeeklyUsage,
+    resetFreeWeeklyUsage, resyncStripe,
     apiKeys, saveApiKeys,
     billing, saveBilling,
     limits, saveLimits,
@@ -231,11 +233,11 @@ export default function AdminPanel({ user }) {
                         <th className="text-left px-4 py-3">User</th>
                         <th className="text-left px-4 py-3">Plan</th>
                         <th className="text-left px-4 py-3">Status</th>
-                        <th className="text-left px-4 py-3">Expires</th>
-                        <th className="text-right px-3 py-3">Week</th>
-                        <th className="text-right px-3 py-3">Month</th>
-                        <th className="text-right px-3 py-3">Audio/mo</th>
-                        <th className="text-right px-3 py-3 text-amber-300/70">Cost/mo</th>
+                        <th className="text-left px-4 py-3" title="Admin-only override (comped / team grants). Stripe renewals shown in Subscribers tab.">Manual expiry</th>
+                        <th className="text-right px-3 py-3" title="Popup generations this week">Gens / wk</th>
+                        <th className="text-right px-3 py-3" title="Dictated words this week">Audio / wk</th>
+                        <th className="text-right px-3 py-3" title="Popup generations all time">Gens all-time</th>
+                        <th className="text-right px-3 py-3" title="Dictated words all time">Audio all-time</th>
                         <th className="text-right px-4 py-3">Joined</th>
                         <th className="text-right px-4 py-3">Last seen</th>
                         <th className="px-4 py-3"></th>
@@ -297,6 +299,7 @@ export default function AdminPanel({ user }) {
         {tab === 'subscribers' && (
           <SubscribersSection
             users={users} loading={loading} error={error} refresh={refresh}
+            resyncStripe={resyncStripe}
           />
         )}
 
@@ -342,10 +345,10 @@ function DesktopRow({ user, month, week, onPlan, onStatus, onExpiry, onDelete })
   const suspended = user.status === 'suspended';
   const expired   = isExpired(user.expiresAt);
 
-  const popupMonth = user.usage?.[month]            || 0;
-  const popupWeek  = user.usageWeekly?.[week]       || 0;
-  const audioMonth = user.audioWords?.[month]        || 0;
-  const cost       = popupMonth * COST_PER_POPUP + audioMonth * COST_PER_AUDIO_WORD;
+  const gensWeek   = user.usageWeekly?.[week]       || 0;
+  const audioWeek  = user.audioWordsWeekly?.[week]  || 0;
+  const gensAll    = user.allTimeUsage              || 0;
+  const audioAll   = user.allTimeAudioWords         || 0;
 
   async function wrap(fn) { setBusy(true); try { await fn(); } finally { setBusy(false); } }
 
@@ -367,19 +370,13 @@ function DesktopRow({ user, month, week, onPlan, onStatus, onExpiry, onDelete })
         <StatusToggle suspended={suspended} onChange={(s) => wrap(() => onStatus(s))} busy={busy} />
       </td>
       <td className="px-4 py-3">
-        <ExpiryPicker value={user.expiresAt} expired={expired} onChange={(d) => wrap(() => onExpiry(d))} busy={busy} />
+        <ManualExpiryCell value={user.expiresAt} expired={expired} busy={busy}
+          onChange={(d) => wrap(() => onExpiry(d))} />
       </td>
-      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">{popupWeek}</td>
-      <td className="px-3 py-3 text-right tabular-nums text-white/80">
-        {popupMonth}
-        {user.plan === 'free' && <span className="text-white/30 text-[10px]">/30</span>}
-      </td>
-      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">
-        {audioMonth > 0 ? audioMonth.toLocaleString() : '—'}
-      </td>
-      <td className="px-3 py-3 text-right tabular-nums text-amber-300 text-xs font-medium">
-        {fmtCost(cost)}
-      </td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/80">{gensWeek.toLocaleString()}</td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/80">{audioWeek.toLocaleString()}</td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">{gensAll.toLocaleString()}</td>
+      <td className="px-3 py-3 text-right tabular-nums text-white/60 text-xs">{audioAll.toLocaleString()}</td>
       <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtDate(user.createdAt)}</td>
       <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtRelative(user.lastSeen)}</td>
       <td className="px-4 py-3 text-right">
@@ -402,10 +399,10 @@ function MobileCard({ user, month, week, onPlan, onStatus, onExpiry, onDelete })
   const suspended = user.status === 'suspended';
   const expired   = isExpired(user.expiresAt);
 
-  const popupMonth = user.usage?.[month]      || 0;
-  const popupWeek  = user.usageWeekly?.[week] || 0;
-  const audioMonth = user.audioWords?.[month] || 0;
-  const cost       = popupMonth * COST_PER_POPUP + audioMonth * COST_PER_AUDIO_WORD;
+  const gensWeek  = user.usageWeekly?.[week]       || 0;
+  const audioWeek = user.audioWordsWeekly?.[week]  || 0;
+  const gensAll   = user.allTimeUsage              || 0;
+  const audioAll  = user.allTimeAudioWords         || 0;
 
   async function wrap(fn) { setBusy(true); try { await fn(); } finally { setBusy(false); } }
 
@@ -426,7 +423,7 @@ function MobileCard({ user, month, week, onPlan, onStatus, onExpiry, onDelete })
         <StatusToggle suspended={suspended} onChange={(s) => wrap(() => onStatus(s))} busy={busy} />
         <button type="button" onClick={() => setShowExpiry((v) => !v)}
           className="text-[11px] text-white/50 border border-white/15 rounded-full px-2.5 py-1 hover:border-white/30 transition">
-          {user.expiresAt ? `Expires ${fmtDate(user.expiresAt)}` : '+ Set expiry'}
+          {user.expiresAt ? `Manual expiry ${fmtDate(user.expiresAt)}` : '+ Manual expiry'}
         </button>
       </div>
 
@@ -437,12 +434,12 @@ function MobileCard({ user, month, week, onPlan, onStatus, onExpiry, onDelete })
       )}
 
       <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
-        <MiniStat label="Popups / week"  value={popupWeek} />
-        <MiniStat label="Popups / month" value={`${popupMonth}${user.plan === 'free' ? '/30' : ''}`} />
-        <MiniStat label="Audio / month"  value={audioMonth > 0 ? `${audioMonth.toLocaleString()} words` : '—'} />
-        <MiniStat label="Est. cost/mo"   value={fmtCost(cost)} highlight />
-        <MiniStat label="Joined"         value={fmtDate(user.createdAt)} />
-        <MiniStat label="Last seen"      value={fmtRelative(user.lastSeen)} />
+        <MiniStat label="Gens / week"     value={gensWeek.toLocaleString()} />
+        <MiniStat label="Audio / week"    value={audioWeek.toLocaleString()} />
+        <MiniStat label="Gens all-time"   value={gensAll.toLocaleString()} />
+        <MiniStat label="Audio all-time"  value={audioAll.toLocaleString()} />
+        <MiniStat label="Joined"          value={fmtDate(user.createdAt)} />
+        <MiniStat label="Last seen"       value={fmtRelative(user.lastSeen)} />
       </div>
 
       <button type="button" onClick={() => { if (window.confirm(`Delete ${user.email}?\nCannot be undone.`)) wrap(onDelete); }}
@@ -567,6 +564,43 @@ function StatusToggle({ suspended, onChange, busy }) {
   );
 }
 
+// Desktop Users-tab cell. Default state is just a text label so each row looks
+// distinct: "Until <date>" if a manual expiry is set, or a subtle "+ Set" link
+// if not. Clicking either reveals the date picker (and a clear button). This
+// keeps the column honest — empty rows look empty instead of showing identical
+// "mm/dd/yyyy" placeholders in every row.
+function ManualExpiryCell({ value, expired, onChange, busy }) {
+  const [open, setOpen] = useState(false);
+  if (open) {
+    return (
+      <div className="flex items-center gap-1.5">
+        <ExpiryPicker value={value} expired={expired} onChange={onChange} busy={busy} />
+        <button type="button" onClick={() => setOpen(false)}
+          className="text-white/30 hover:text-white/70 text-xs transition">done</button>
+      </div>
+    );
+  }
+  if (value) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className={'text-[12px] rounded-full px-2.5 py-1 border transition '
+          + (expired
+            ? 'text-amber-300 border-amber-400/30 bg-amber-500/10 hover:border-amber-400/50'
+            : 'text-white/70 border-white/15 hover:border-white/30')}
+        title={expired ? 'Manual expiry has passed' : 'Click to edit'}>
+        Until {fmtDate(value)}{expired && ' · expired'}
+      </button>
+    );
+  }
+  return (
+    <button type="button" onClick={() => setOpen(true)}
+      className="text-[11px] text-white/30 hover:text-white/60 border border-dashed border-white/10
+                 hover:border-white/25 rounded-full px-2.5 py-1 transition">
+      + Set
+    </button>
+  );
+}
+
 function ExpiryPicker({ value, expired, onChange, busy, full }) {
   return (
     <div className={`flex items-center gap-1.5 ${full ? 'w-full' : ''}`}>
@@ -650,7 +684,7 @@ function ResetFreeButton({ onReset }) {
 
 // ── Subscribers tab ──────────────────────────────────────────────────────────
 
-function SubscribersSection({ users, loading, error, refresh }) {
+function SubscribersSection({ users, loading, error, refresh, resyncStripe }) {
   const subs = useMemo(
     () => users
       .filter((u) => u.plan === 'pro' || u.plan === 'team')
@@ -659,6 +693,32 @@ function SubscribersSection({ users, loading, error, refresh }) {
   );
 
   const mrr = subs.length * 10; // $10/mo Pro — rough gross MRR
+  const [resyncingUid, setResyncingUid] = useState(null);
+  const [resyncSecret, setResyncSecret] = useState(() => {
+    try { return localStorage.getItem('fw_invite_key') || ''; } catch { return ''; }
+  });
+
+  async function handleResync(u) {
+    let secret = resyncSecret;
+    if (!secret) {
+      secret = window.prompt('Enter admin secret (same as invite key):') || '';
+      if (!secret) return;
+      try { localStorage.setItem('fw_invite_key', secret.trim()); } catch { /* ignore */ }
+      setResyncSecret(secret.trim());
+    }
+    setResyncingUid(u.uid);
+    try {
+      const r = await resyncStripe(u.uid, secret);
+      const when = r.currentPeriodEnd
+        ? new Date(r.currentPeriodEnd * 1000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+        : 'no renewal date';
+      window.alert(`✓ Resynced ${u.email}\nPlan: ${r.plan}\nStatus: ${r.subscriptionStatus}\nRenews: ${when}`);
+    } catch (e) {
+      window.alert(`Resync failed: ${e.message}`);
+    } finally {
+      setResyncingUid(null);
+    }
+  }
 
   return (
     <>
@@ -693,8 +753,9 @@ function SubscribersSection({ users, loading, error, refresh }) {
                     <th className="text-left px-4 py-3">Subscriber</th>
                     <th className="text-left px-4 py-3">Plan</th>
                     <th className="text-left px-4 py-3">Subscription</th>
-                    <th className="text-right px-4 py-3">Renews / ends</th>
+                    <th className="text-right px-4 py-3" title="Next Stripe renewal — kept in sync by the webhook.">Renews on</th>
                     <th className="text-right px-4 py-3">Member since</th>
+                    <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -722,6 +783,15 @@ function SubscribersSection({ users, loading, error, refresh }) {
                       </td>
                       <td className="px-4 py-3 text-right text-white/60 text-xs">{fmtPeriodEnd(u.currentPeriodEnd)}</td>
                       <td className="px-4 py-3 text-right text-white/40 text-xs">{fmtDate(u.createdAt)}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button type="button" onClick={() => handleResync(u)}
+                          disabled={resyncingUid === u.uid}
+                          title="Re-fetch this subscription from Stripe and update Firestore"
+                          className="text-[11px] text-white/50 hover:text-white border border-white/10
+                                     hover:border-white/30 rounded-lg px-2.5 py-1 transition disabled:opacity-40">
+                          {resyncingUid === u.uid ? '…' : '↻ Resync'}
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -744,9 +814,15 @@ function SubscribersSection({ users, loading, error, refresh }) {
                   </div>
                   <div className="grid grid-cols-2 gap-2 pt-3 border-t border-white/5">
                     <MiniStat label="Subscription" value={u.subscriptionStatus || (u.stripeCustomerId ? 'active' : 'manual')} />
-                    <MiniStat label="Renews / ends" value={fmtPeriodEnd(u.currentPeriodEnd)} />
+                    <MiniStat label="Renews on"   value={fmtPeriodEnd(u.currentPeriodEnd)} />
                     <MiniStat label="Member since" value={fmtDate(u.createdAt)} />
                   </div>
+                  <button type="button" onClick={() => handleResync(u)}
+                    disabled={resyncingUid === u.uid}
+                    className="mt-3 w-full text-center text-xs text-white/60 hover:text-white
+                               border border-white/15 hover:border-white/30 rounded-xl py-2 transition disabled:opacity-40">
+                    {resyncingUid === u.uid ? '…' : '↻ Resync from Stripe'}
+                  </button>
                 </div>
               ))}
             </div>

@@ -133,21 +133,26 @@ export function useAdmin(user) {
     setLoading(true);
     setError(null);
     try {
-      const q = query(collection(firestore, 'users'), orderBy('createdAt', 'desc'));
-      const snap = await getDocs(q);
-      setUsers(
-        snap.docs.map((d) => {
-          const data = d.data();
-          return {
-            uid: d.id,
-            ...data,
-            createdAt:  data.createdAt?.toMillis?.()  ?? data.createdAt  ?? null,
-            lastSeen:   data.lastSeen?.toMillis?.()   ?? data.lastSeen   ?? null,
-            lastUsed:   data.lastUsed?.toMillis?.()   ?? data.lastUsed   ?? null,
-            expiresAt:  data.expiresAt?.toMillis?.()  ?? data.expiresAt  ?? null,
-          };
-        }),
-      );
+      // IMPORTANT: do NOT use orderBy('createdAt') here. Firestore silently
+      // excludes any document missing that field, which hid users created by
+      // clients that didn't write createdAt (e.g. earlier iOS builds). Fetch
+      // the whole collection and sort client-side so EVERY user shows, even
+      // free users and docs with missing/legacy fields.
+      const snap = await getDocs(collection(firestore, 'users'));
+      const list = snap.docs.map((d) => {
+        const data = d.data();
+        return {
+          uid: d.id,
+          ...data,
+          createdAt:  data.createdAt?.toMillis?.()  ?? data.createdAt  ?? null,
+          lastSeen:   data.lastSeen?.toMillis?.()   ?? data.lastSeen   ?? null,
+          lastUsed:   data.lastUsed?.toMillis?.()   ?? data.lastUsed   ?? null,
+          expiresAt:  data.expiresAt?.toMillis?.()  ?? data.expiresAt  ?? null,
+        };
+      });
+      // Newest first; users without a createdAt sort to the bottom.
+      list.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+      setUsers(list);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -288,6 +293,30 @@ export function useAdmin(user) {
       : u)));
   }, []);
 
+  // Re-fetch a user's Stripe subscription and update their Firestore record.
+  // Useful for backfilling currentPeriodEnd when the webhook missed it or
+  // wrote 0 (e.g. Stripe 2026 API moved the field onto subscription items).
+  const resyncStripe = useCallback(async (uid, secret) => {
+    const res = await fetch('/admin-resync-stripe.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uid, secret: secret || '' }),
+    });
+    let payload = {};
+    try { payload = await res.json(); } catch { /* ignore */ }
+    if (!res.ok || payload.error) {
+      throw new Error(payload.error || `Resync failed (HTTP ${res.status}).`);
+    }
+    // Reflect the updated values locally so the UI refreshes immediately.
+    setUsers((prev) => prev.map((u) => (u.uid === uid
+      ? { ...u,
+          plan: payload.plan || u.plan,
+          subscriptionStatus: payload.subscriptionStatus || u.subscriptionStatus,
+          currentPeriodEnd: payload.currentPeriodEnd ?? u.currentPeriodEnd }
+      : u)));
+    return payload;
+  }, []);
+
   // Delete the user's Firestore record entirely.
   const deleteUser = useCallback(async (uid) => {
     await deleteDoc(doc(firestore, 'users', uid));
@@ -393,6 +422,7 @@ export function useAdmin(user) {
     refresh: fetchUsers,
     updatePlan, updateStatus, updateExpiry, deleteUser,
     resetFreeWeeklyUsage, resetUserWeeklyUsage,
+    resyncStripe,
     invites, inviteUser, resendInvite, deleteInvite,
     apiKeys, saveApiKeys,
     billing, saveBilling,
