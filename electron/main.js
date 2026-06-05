@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import https from 'node:https';
 import Store from 'electron-store';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI, { toFile } from 'openai';
@@ -1065,6 +1066,104 @@ ipcMain.handle('google-sign-in', async (_event, { clientId, clientSecret } = {})
     console.error('[FlowWrite] google-sign-in failed:', err.message);
     return { ok: false, error: err.message || String(err) };
   }
+});
+
+// ── Server diagnostics (temporary) ───────────────────────────────────────────
+// Exercises the server proxy (api-generate / api-transcribe) on demand and
+// returns a copyable, step-by-step report. This does NOT change how generation
+// works today — it's a safe probe so we can see exactly why the proxy failed
+// before migrating to it. Remove once the migration is done & verified.
+const FW_SERVER = 'https://flowwrite.u11.ca';
+
+function serverPostJson(path, obj, token) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify(obj));
+    const req = https.request(`${FW_SERVER}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': data.length,
+        Authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function serverPostMultipart(path, token, fields, fileField, buffer, filename, mime) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----FlowWrite' + Math.random().toString(36).slice(2);
+    const parts = [];
+    for (const [k, v] of Object.entries(fields)) {
+      parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`);
+    }
+    parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; `
+      + `filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`);
+    const head = Buffer.from(parts.join(''), 'utf8');
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const payload = Buffer.concat([head, buffer, tail]);
+    const req = https.request(`${FW_SERVER}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': payload.length,
+        Authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+ipcMain.handle('run-diagnostics', async (_e, { idToken } = {}) => {
+  const log = [];
+  const t = (m) => log.push(`[${new Date().toISOString().slice(11, 19)}] ${m}`);
+  t(`FlowWrite ${app.getVersion()} · ${process.platform} · Electron ${process.versions.electron} · Node ${process.versions.node}`);
+  t(`Server: ${FW_SERVER}`);
+  t(`Token from app: ${idToken ? `${idToken.length} chars (looks ${idToken.split('.').length === 3 ? 'OK' : 'MALFORMED'})` : 'MISSING — are you signed in?'}`);
+  if (!idToken) {
+    t('STOP: no login token. Open the FlowWrite window and make sure you are signed in.');
+    return log.join('\n');
+  }
+
+  // Probe 1 — text generation through the proxy.
+  t('');
+  t('── Test 1: POST /api-generate.php ──');
+  try {
+    const { status, body } = await serverPostJson('/api-generate.php', { prompt: 'Reply with exactly: diagnostics ok' }, idToken);
+    t(`HTTP ${status}`);
+    t(`Body: ${String(body).slice(0, 500)}`);
+  } catch (e) {
+    t(`NETWORK EXCEPTION: ${e.message}${e.code ? ` (code=${e.code})` : ''}`);
+  }
+
+  // Probe 2 — transcription endpoint reachability (tiny dummy payload).
+  t('');
+  t('── Test 2: POST /api-transcribe.php (connectivity) ──');
+  try {
+    const { status, body } = await serverPostMultipart(
+      '/api-transcribe.php', idToken, { polish: '0' }, 'audio',
+      Buffer.from([0, 0, 0, 0]), 'probe.webm', 'audio/webm');
+    t(`HTTP ${status}`);
+    t(`Body: ${String(body).slice(0, 500)}`);
+  } catch (e) {
+    t(`NETWORK EXCEPTION: ${e.message}${e.code ? ` (code=${e.code})` : ''}`);
+  }
+
+  t('');
+  t('── End of report ──');
+  return log.join('\n');
 });
 
 /**

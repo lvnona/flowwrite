@@ -12,6 +12,7 @@ import TemplateModal from '../components/TemplateModal.jsx';
 import { useAuth } from '../hooks/useAuth.js';
 import { useTemplates } from '../hooks/useTemplates.js';
 import { customerPortalUrl } from '../utils/billing.js';
+import { getFirebaseAuth } from '../utils/firebase.js';
 
 const NICHES = ['Real Estate', 'Recruitment', 'Sales', 'General', 'Custom'];
 
@@ -215,6 +216,8 @@ export default function Settings() {
           </div>
 
           <UpdatesCard />
+
+          <DiagnosticsCard />
 
           <label className="flex items-start gap-3 mb-5 cursor-pointer select-none">
             <input
@@ -653,6 +656,73 @@ function PermRow({ title, why, ok, statusText, actionLabel, onAction }) {
         <button type="button" className="pill text-[12px] shrink-0" onClick={onAction}>
           {actionLabel}
         </button>
+      )}
+    </div>
+  );
+}
+
+// ── Server diagnostics card (temporary) ──────────────────────────────────────
+// Runs the server-proxy connectivity test and shows a copyable report so the
+// exact failure can be diagnosed. Does not affect normal generation. Remove
+// once the proxy migration is verified.
+function DiagnosticsCard() {
+  const [running, setRunning] = useState(false);
+  const [report, setReport] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  async function run() {
+    setRunning(true);
+    setReport('');
+    setCopied(false);
+    let idToken = '';
+    try { idToken = (await getFirebaseAuth()?.currentUser?.getIdToken?.()) || ''; } catch { /* ignore */ }
+    try {
+      const out = await window.flowwrite?.runDiagnostics?.({ idToken });
+      setReport(out || 'No report returned.');
+    } catch (e) {
+      setReport('Failed to run diagnostics: ' + (e?.message || String(e)));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  function copy() {
+    try {
+      navigator.clipboard.writeText(report);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* ignore */ }
+  }
+
+  return (
+    <div className="mb-5 p-4 rounded-xl border border-amber-400/25 bg-amber-500/[0.06]">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Server diagnostics</div>
+          <div className="text-[12px] text-white/45 mt-0.5">
+            Tests the cloud connection. If something isn’t working, run this and send the report.
+          </div>
+        </div>
+        <button type="button" className="pill text-[12px] shrink-0" onClick={run} disabled={running}>
+          {running ? 'Running…' : 'Run diagnostics'}
+        </button>
+      </div>
+
+      {report && (
+        <div className="mt-3">
+          <textarea
+            readOnly
+            value={report}
+            spellCheck={false}
+            className="w-full h-44 bg-black/30 border border-white/10 rounded-lg p-2.5 text-[11px] font-mono leading-relaxed text-white/80 focus:outline-none resize-y"
+          />
+          <div className="flex items-center gap-3 mt-2">
+            <button type="button" className="pill text-[12px]" onClick={copy}>
+              {copied ? '✓ Copied' : 'Copy report'}
+            </button>
+            <span className="text-[11px] text-white/40">Paste this back to support to diagnose the issue.</span>
+          </div>
+        </div>
       )}
     </div>
   );

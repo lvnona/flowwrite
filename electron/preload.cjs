@@ -43,6 +43,10 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // App version string (for the Dashboard footer).
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
 
+  // Temporary: run a server-proxy connectivity diagnostic and return a copyable
+  // report. The renderer passes a fresh Firebase ID token.
+  runDiagnostics: (payload) => ipcRenderer.invoke('run-diagnostics', payload),
+
   // Manual update check + install (auto-update also runs silently in the
   // background; this is the visible "Check for updates" button).
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
