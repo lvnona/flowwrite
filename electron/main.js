@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import https from 'node:https';
 import Store from 'electron-store';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI, { toFile } from 'openai';
@@ -374,22 +375,38 @@ function startWindowsPtt() {
   return true;
 }
 
+// Recreate the dictation overlay if it was never created or got destroyed
+// (Electron can tear down a transparent/hidden window if its render process
+// dies — e.g. after a GPU restart). Self-healing so pressing the key can never
+// crash on a stale, destroyed window reference.
+function ensureDictationWindow() {
+  if (!dictationWindow || dictationWindow.isDestroyed()) {
+    dictationWindow = createDictationWindow();
+  }
+  return dictationWindow;
+}
+
 function onFnDown() {
   const s = store.get('settings');
   if (s.paused || s.transcriberEnabled === false) return;
   if (dictating) return;
-  if (!dictationWindow) return;
+  const win = ensureDictationWindow();
+  if (!win) return;
   dictating = true;
   dictationStart = Date.now();
-  showDictationBar(dictationWindow);
-  dictationWindow.webContents.send('dictation:start');
+  showDictationBar(win);
+  // If we just recreated the window its renderer may still be loading; wait for
+  // it before sending the start signal so the first dictation isn't lost.
+  const sendStart = () => { try { win.webContents.send('dictation:start'); } catch { /* ignore */ } };
+  if (win.webContents.isLoading()) win.webContents.once('did-finish-load', sendStart);
+  else sendStart();
 }
 
 function onFnUp() {
-  if (!dictating || !dictationWindow) return;
+  if (!dictating || !dictationWindow || dictationWindow.isDestroyed()) return;
   const heldMs = Date.now() - dictationStart;
   // Quick taps (and Fn+key combos) shouldn't transcribe — discard them.
-  dictationWindow.webContents.send('dictation:stop', { discard: heldMs < 350 });
+  try { dictationWindow.webContents.send('dictation:stop', { discard: heldMs < 350 }); } catch { /* ignore */ }
 }
 
 // ── Configurable dictation trigger ───────────────────────────────────────────
@@ -413,14 +430,17 @@ function resolveDictationHotkey(s) {
 function toggleDictation() {
   const s = store.get('settings');
   if (s.paused || s.transcriberEnabled === false) return;
-  if (!dictationWindow) return;
+  const win = ensureDictationWindow();
+  if (!win) return;
   if (dictating) {
-    dictationWindow.webContents.send('dictation:stop', { discard: false });
+    try { win.webContents.send('dictation:stop', { discard: false }); } catch { /* ignore */ }
   } else {
     dictating = true;
     dictationStart = Date.now();
-    showDictationBar(dictationWindow);
-    dictationWindow.webContents.send('dictation:start');
+    showDictationBar(win);
+    const sendStart = () => { try { win.webContents.send('dictation:start'); } catch { /* ignore */ } };
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', sendStart);
+    else sendStart();
   }
 }
 
@@ -1073,30 +1093,97 @@ ipcMain.handle('set-id-token', (_e, token) => {
   return { ok: true };
 });
 
+// Get a usable token: the pushed one if present, otherwise ask the authed main
+// window for a fresh one right now (covers cold-start / token expiry so the
+// dictation bar — which has no auth context of its own — always works).
+async function getServerToken() {
+  if (fwIdToken) return fwIdToken;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try {
+      const t = await win.webContents.executeJavaScript(
+        'window.__fwIdToken ? window.__fwIdToken() : null', true,
+      );
+      if (t && typeof t === 'string') { fwIdToken = t; return t; }
+    } catch { /* try next window */ }
+  }
+  return '';
+}
+
+// ── HTTP via Node's https module (reliable in the packaged main process; avoids
+// any ambiguity around global fetch / FormData / Blob in Electron). ──────────
+function serverPostJson(path, obj, token) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify(obj));
+    const req = https.request(`${FW_SERVER}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': data.length,
+        Authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function serverPostMultipart(path, token, fields, fileField, buffer, filename, mime) {
+  return new Promise((resolve, reject) => {
+    const boundary = '----FlowWrite' + Math.random().toString(36).slice(2);
+    const parts = [];
+    for (const [k, v] of Object.entries(fields)) {
+      parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`);
+    }
+    parts.push(`--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; `
+      + `filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`);
+    const head = Buffer.from(parts.join(''), 'utf8');
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8');
+    const payload = Buffer.concat([head, buffer, tail]);
+    const req = https.request(`${FW_SERVER}${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': payload.length,
+        Authorization: `Bearer ${token}`,
+      },
+    }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ status: res.statusCode, body }));
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
 ipcMain.handle('generate-text', async (event, { prompt }) => {
-  if (!fwIdToken) {
-    return { ok: false, error: 'Please open FlowWrite and sign in first.' };
+  const token = await getServerToken();
+  if (!token) {
+    return { ok: false, error: 'Please open the FlowWrite window and sign in, then try again.' };
   }
   try {
-    const res = await fetch(`${FW_SERVER}/api-generate.php`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${fwIdToken}` },
-      body: JSON.stringify({ prompt }),
-    });
-    if (res.status === 402) {
-      const d = await res.json().catch(() => ({}));
+    const { status, body } = await serverPostJson('/api-generate.php', { prompt }, token);
+    let data = {};
+    try { data = JSON.parse(body); } catch { /* non-JSON body */ }
+    if (status === 402) {
       return {
         ok: false,
         limitReached: 'generations',
-        error: `You've used all ${d.limit ?? ''} free generations this week.`,
+        error: `You've used all ${data.limit ?? ''} free generations this week.`,
       };
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      return { ok: false, error: data.error || data.detail || `Server error (${res.status})` };
+    if (status !== 200 || !data.ok) {
+      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }
-    // The server returns the full text (not streamed). Emit it as a single
-    // chunk so the popup's existing streaming UI renders it.
+    // The server returns the full text (not streamed). Emit it as one chunk so
+    // the popup's existing streaming UI renders it.
     const text = data.text || '';
     event.sender.send('generate:chunk', text);
     return { ok: true, text };
@@ -1187,8 +1274,9 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
   if (settings.transcriberEnabled === false) {
     return { ok: false, error: 'Audio transcriber is turned off in Settings.' };
   }
-  if (!fwIdToken) {
-    return { ok: false, error: 'Please open FlowWrite and sign in first.' };
+  const token = await getServerToken();
+  if (!token) {
+    return { ok: false, error: 'Please open the FlowWrite window and sign in, then try again.' };
   }
   if (!audio || audio.byteLength === 0) {
     return { ok: false, error: 'No audio captured. Try holding the mic a little longer.' };
@@ -1203,26 +1291,22 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
 
     // Upload to the server, which enforces the word limit, transcribes with the
     // admin Whisper key, counts the words, and records them in Firebase.
-    const form = new FormData();
-    form.append('audio', new Blob([buffer], { type: mimeType || 'audio/webm' }), `dictation.${ext}`);
-    form.append('polish', settings.polishDictation === false ? '0' : '1');
-
-    const res = await fetch(`${FW_SERVER}/api-transcribe.php`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${fwIdToken}` },
-      body: form,
-    });
-    if (res.status === 402) {
-      const d = await res.json().catch(() => ({}));
+    const { status, body } = await serverPostMultipart(
+      '/api-transcribe.php', token,
+      { polish: settings.polishDictation === false ? '0' : '1' },
+      'audio', buffer, `dictation.${ext}`, mimeType || 'audio/webm',
+    );
+    let data = {};
+    try { data = JSON.parse(body); } catch { /* non-JSON body */ }
+    if (status === 402) {
       return {
         ok: false,
         limitReached: 'audio',
-        error: `You've used all ${d.limit ?? ''} free dictated words this week.`,
+        error: `You've used all ${data.limit ?? ''} free dictated words this week.`,
       };
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok || !data.ok) {
-      return { ok: false, error: data.error || data.detail || `Server error (${res.status})` };
+    if (status !== 200 || !data.ok) {
+      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }
 
     const text = (data.text || '').trim();

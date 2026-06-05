@@ -72,7 +72,7 @@ export function createDictationWindow() {
 
 /** Position bottom-center on the display under the cursor, then show inactive. */
 export function showDictationBar(win) {
-  if (!win) return;
+  if (!win || win.isDestroyed()) return;   // destroyed-but-non-null guard
   const cursor = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(cursor);
   const wa = display.workArea; // excludes Dock / menu bar
@@ -89,5 +89,5 @@ export function showDictationBar(win) {
 
 export function hideDictationBar(win) {
   stopKeepOnTop();
-  if (win && win.isVisible()) win.hide();
+  if (win && !win.isDestroyed() && win.isVisible()) win.hide();
 }

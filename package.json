@@ -1,6 +1,6 @@
 {
   "name": "flowwrite",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "AI writing assistant that lives in your system tray and helps fill any text field with Claude-generated content.",
   "main": "electron/main.js",
   "type": "module",

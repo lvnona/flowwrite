@@ -90,6 +90,12 @@ export default function App() {
   // Tokens last ~1h; refresh well before that, on focus, and clear on sign-out.
   useEffect(() => {
     if (route === 'dictation') return undefined;
+    // Let the main process pull a fresh token on demand (used as a fallback when
+    // the pushed one is missing/expired — e.g. the dictation bar at cold start).
+    window.__fwIdToken = async () => {
+      try { return (await getFirebaseAuth()?.currentUser?.getIdToken?.()) || null; }
+      catch { return null; }
+    };
     if (!user) { window.flowwrite?.setIdToken?.(''); return undefined; }
     let cancelled = false;
     const push = async () => {
