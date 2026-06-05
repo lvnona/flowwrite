@@ -1075,6 +1075,16 @@ ipcMain.handle('google-sign-in', async (_event, { clientId, clientSecret } = {})
 // before migrating to it. Remove once the migration is done & verified.
 const FW_SERVER = 'https://flowwrite.u11.ca';
 
+// The signed-in main window pushes a fresh Firebase ID token here on a timer.
+// The DICTATION bar has no auth context of its own, so its transcription call
+// (which runs in main) uses this pushed token. The popup passes its own token
+// inline, so it doesn't depend on this.
+let fwIdToken = '';
+ipcMain.handle('set-id-token', (_e, token) => {
+  fwIdToken = (typeof token === 'string') ? token : '';
+  return { ok: true };
+});
+
 function serverPostJson(path, obj, token) {
   return new Promise((resolve, reject) => {
     const data = Buffer.from(JSON.stringify(obj));
@@ -1132,6 +1142,7 @@ ipcMain.handle('run-diagnostics', async (_e, { idToken } = {}) => {
   t(`FlowWrite ${app.getVersion()} · ${process.platform} · Electron ${process.versions.electron} · Node ${process.versions.node}`);
   t(`Server: ${FW_SERVER}`);
   t(`Token from app: ${idToken ? `${idToken.length} chars (looks ${idToken.split('.').length === 3 ? 'OK' : 'MALFORMED'})` : 'MISSING — are you signed in?'}`);
+  t(`Pushed token in main (used by dictation): ${fwIdToken ? `${fwIdToken.length} chars — OK` : 'NONE yet (main window has not pushed one)'}`);
   if (!idToken) {
     t('STOP: no login token. Open the FlowWrite window and make sure you are signed in.');
     return log.join('\n');
@@ -1281,72 +1292,60 @@ ipcMain.handle('dictation-cancel', () => {
  * Payload: { audio: Uint8Array, mimeType: string }
  * Returns: { ok: true, text } | { ok: false, error }
  */
-ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType } = {}) => {
+// Dictation now goes through the server proxy (api-transcribe.php): the server
+// holds the Whisper key, enforces the weekly word limit, polishes the text, and
+// records the word count in Firebase. The dictation bar has no auth context, so
+// it uses the token the main window pushed (fwIdToken); the popup mic can pass
+// its own token inline.
+ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType, idToken } = {}) => {
   const settings = store.get('settings');
   if (settings.transcriberEnabled === false) {
     return { ok: false, error: 'Audio transcriber is turned off in Settings.' };
   }
-  // Free-tier weekly dictation limit (per-account; resets each ISO week).
-  if (!isUnlimited() && cloudAudioWords() >= FREE_LIMITS.audioWordsPerWeek) {
-    return {
-      ok: false,
-      limitReached: 'audio',
-      error: `You've used all ${FREE_LIMITS.audioWordsPerWeek} free dictated words this week.`,
-    };
-  }
-  const openaiKey = store.get('apiKeys')?.openai || settings.openaiApiKey;
-  if (!openaiKey) {
-    return {
-      ok: false,
-      error: 'Voice transcription isn\'t configured yet. Please contact the administrator.',
-    };
+  const token = idToken || fwIdToken;
+  if (!token) {
+    return { ok: false, error: 'Not signed in — open the FlowWrite window and sign in, then try again.' };
   }
   if (!audio || audio.byteLength === 0) {
     return { ok: false, error: 'No audio captured. Try holding the mic a little longer.' };
   }
 
   try {
-    const openai = new OpenAI({ apiKey: openaiKey });
     const buffer = Buffer.from(audio);
     const ext = (mimeType || '').includes('mp4') ? 'mp4'
       : (mimeType || '').includes('wav') ? 'wav'
       : (mimeType || '').includes('ogg') ? 'ogg'
       : 'webm';
-    const file = await toFile(buffer, `dictation.${ext}`, { type: mimeType || 'audio/webm' });
 
-    const transcription = await openai.audio.transcriptions.create({
-      file,
-      model: 'whisper-1',
-    });
-
-    let text = (transcription.text || '').trim();
-    if (text && settings.polishDictation !== false) {
-      const cleaned = await polishDictation(openai, text);
-      if (cleaned) text = cleaned;
+    const { status, body } = await serverPostMultipart(
+      '/api-transcribe.php', token,
+      { polish: settings.polishDictation === false ? '0' : '1' },
+      'audio', buffer, `dictation.${ext}`, mimeType || 'audio/webm');
+    let data = {};
+    try { data = JSON.parse(body); } catch { /* non-JSON */ }
+    if (status === 402) {
+      return {
+        ok: false,
+        limitReached: 'audio',
+        error: `You've used all ${data.limit ?? ''} free dictated words this week.`,
+      };
+    }
+    if (status !== 200 || !data.ok) {
+      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }
 
-    // Track words transcribed (shown in Settings → Audio transcriber + the
-    // Dashboard). Counted here in the main process so EVERY dictation source
-    // (popup mic + the Fn dictation bar) is included regardless of auth state.
-    if (text) {
-      const n = text.split(/\s+/).filter(Boolean).length;
+    const text = (data.text || '').trim();
+    // Local display stat only (Settings → Audio transcriber). The authoritative
+    // per-account count lives in Firebase, written by the server — no cloud
+    // bump here (that would double-count).
+    if (text && data.words) {
       const stats = store.get('transcriberStats') || { words: 0, weekly: {}, monthly: {} };
-      stats.words = (stats.words || 0) + n;
+      stats.words = (stats.words || 0) + data.words;
       stats.weekly = stats.weekly || {};
       stats.monthly = stats.monthly || {};
-      const wk = isoWeekKey();
-      const mo = monthKey();
-      stats.weekly[wk] = (stats.weekly[wk] || 0) + n;
-      stats.monthly[mo] = (stats.monthly[mo] || 0) + n;
+      stats.weekly[isoWeekKey()] = (stats.weekly[isoWeekKey()] || 0) + data.words;
+      stats.monthly[monthKey()] = (stats.monthly[monthKey()] || 0) + data.words;
       store.set('transcriberStats', stats);
-
-      // Per-account: optimistic bump + route the count to the (authed) main
-      // window so it writes to the user's cloud profile. This covers ALL
-      // dictation — popup mic AND the Fn/PTT bar — exactly once.
-      bumpCloudAudioWords(n);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('usage:audio-words', n);
-      }
     }
 
     return { ok: true, text };

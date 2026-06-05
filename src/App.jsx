@@ -23,9 +23,9 @@ import Onboarding from './components/Onboarding.jsx';
 
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useAuth } from './hooks/useAuth.js';
-import { getFirebaseFirestore } from './utils/firebase.js';
+import { getFirebaseFirestore, getFirebaseAuth } from './utils/firebase.js';
 import { isConfigured } from './utils/firebaseConfig.js';
-import { thisWeekKey, incrementAudioWords } from './utils/usageTracking.js';
+import { thisWeekKey } from './utils/usageTracking.js';
 
 // Shown in the popup window while Firebase is initialising auth state.
 function PopupLoading() {
@@ -103,17 +103,30 @@ export default function App() {
     });
   }, [user, profile, route]);
 
-  // The main process routes each transcription's word count to the main window
-  // (the persistent, authed renderer) so it lands in the user's cloud profile —
-  // covering popup-mic AND the Fn/PTT bar. The event is only sent to the main
-  // window, so this fires once even though the popup also mounts App.
+  // Push a fresh Firebase ID token to the main process so the DICTATION bar
+  // (which has no auth context of its own) can transcribe through the server
+  // proxy. Tokens last ~1h; refresh every 4 min while signed in. The popup
+  // passes its own token inline, so it doesn't depend on this.
   useEffect(() => {
     if (route === 'dictation') return undefined;
-    const off = window.flowwrite?.onAudioWords?.((n) => {
-      try { incrementAudioWords?.(n)?.catch?.(() => {}); } catch { /* ignore */ }
-    });
-    return () => off?.();
-  }, [route]);
+    if (!user) { window.flowwrite?.setIdToken?.(''); return undefined; }
+    let cancelled = false;
+    const push = async () => {
+      try {
+        const t = await getFirebaseAuth()?.currentUser?.getIdToken?.();
+        if (!cancelled && t) window.flowwrite?.setIdToken?.(t);
+      } catch { /* ignore */ }
+    };
+    push();
+    const id = setInterval(push, 4 * 60 * 1000);
+    const onFocus = () => push();
+    window.addEventListener('focus', onFocus);
+    return () => { cancelled = true; clearInterval(id); window.removeEventListener('focus', onFocus); };
+  }, [user, route]);
+
+  // NOTE: dictation word counts are now recorded SERVER-SIDE (api-transcribe.php
+  // writes them to Firebase), so the old onAudioWords → incrementAudioWords path
+  // is gone — keeping it would double-count.
 
   useEffect(() => {
     const handler = () => setRoute(readRoute());

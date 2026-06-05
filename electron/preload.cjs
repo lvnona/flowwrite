@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld('flowwrite', {
   // report. The renderer passes a fresh Firebase ID token.
   runDiagnostics: (payload) => ipcRenderer.invoke('run-diagnostics', payload),
 
+  // The signed-in main window pushes a fresh ID token so the dictation bar
+  // (which has no auth context) can transcribe through the server.
+  setIdToken: (token) => ipcRenderer.invoke('set-id-token', token),
+
   // Manual update check + install (auto-update also runs silently in the
   // background; this is the visible "Check for updates" button).
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
