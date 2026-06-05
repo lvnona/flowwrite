@@ -12,6 +12,8 @@
 //   and the pending IPC call is abandoned (it still runs in main, but we stop
 //   listening).
 
+import { getFirebaseAuth } from './firebase.js';
+
 /**
  * Async generator that yields streaming text chunks from Claude.
  * The generator returns the full accumulated text as its return value.
@@ -34,6 +36,12 @@ export async function* stream(prompt, signal) {
     if (resolveWaiter) { resolveWaiter(); resolveWaiter = null; }
   }
 
+  // Fetch a fresh Firebase ID token here (the popup is signed in) and pass it
+  // to main, which forwards it to the server proxy. This is the proven token
+  // path — the server holds the AI key and enforces limits.
+  let idToken = '';
+  try { idToken = (await getFirebaseAuth()?.currentUser?.getIdToken?.()) || ''; } catch { /* ignore */ }
+
   // Subscribe to streaming chunks BEFORE firing the request so we never miss
   // a chunk that arrives in the same tick.
   const offChunks = window.flowwrite.onGenerateChunk((chunk) => {
@@ -43,7 +51,7 @@ export async function* stream(prompt, signal) {
 
   // Fire the request. The promise resolves when the full text is available.
   const genPromise = window.flowwrite
-    .generateText({ prompt })
+    .generateText({ prompt, idToken })
     .then((res) => {
       finalText = res?.text ?? '';
       if (!res?.ok) {

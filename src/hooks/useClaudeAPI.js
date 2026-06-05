@@ -20,7 +20,7 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { generate as claudeGenerate } from '../utils/claudeClient.js';
-import { incrementPopupUsage } from '../utils/usageTracking.js';
+// Usage is now recorded server-side (api-generate.php); no client-side increment.
 
 export function useClaudeAPI() {
   const [streaming, setStreaming] = useState(false);
@@ -54,9 +54,9 @@ export function useClaudeAPI() {
         return null;
       }
 
-      // Best-effort usage increment — fully optional, must never throw into
-      // the surrounding catch (which would discard the generated text).
-      try { incrementPopupUsage?.(setUsage); } catch { /* ignore */ }
+      // Usage is now counted SERVER-SIDE (api-generate.php records it in
+      // Firebase), so we no longer increment here — doing both would
+      // double-count. The dashboard reads the cloud count via the profile.
 
       return text;
     } catch (err) {

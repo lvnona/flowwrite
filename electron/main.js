@@ -1172,108 +1172,36 @@ ipcMain.handle('run-diagnostics', async (_e, { idToken } = {}) => {
  * Text chunks are pushed to the renderer window via `generate:chunk` events
  * so claudeClient.js can stream them into the popup.
  */
-ipcMain.handle('generate-text', async (event, { prompt }) => {
-  const keys     = store.get('apiKeys') || {};
-  const provider = keys.popupProvider || 'claude';
-
-  // ── Free-tier weekly limit (per-account) ──────────────────────────────────
-  if (!isUnlimited() && cloudGenerations() >= FREE_LIMITS.generationsPerWeek) {
-    return {
-      ok: false,
-      limitReached: 'generations',
-      error: `You've used all ${FREE_LIMITS.generationsPerWeek} free generations this week.`,
-    };
+// Generation now goes through the server proxy (api-generate.php): the server
+// holds the AI key, enforces the weekly limit, and records usage in Firebase.
+// The signed-in popup renderer passes a fresh Firebase ID token with the
+// request — the proven-reliable token path (same as the Server Diagnostics).
+ipcMain.handle('generate-text', async (event, { prompt, idToken } = {}) => {
+  if (!idToken) {
+    return { ok: false, error: 'Not signed in — please open FlowWrite and sign in, then try again.' };
   }
-
-  // ── Claude (Anthropic) path ──────────────────────────────────────────────
-  if (provider === 'claude') {
-    const apiKey = keys.anthropic || store.get('settings').anthropicApiKey;
-    if (!apiKey) {
-      return { ok: false, error: 'Anthropic API key is not configured. Please ask the administrator to add it in the API Keys settings.' };
+  try {
+    const { status, body } = await serverPostJson('/api-generate.php', { prompt }, idToken);
+    let data = {};
+    try { data = JSON.parse(body); } catch { /* non-JSON */ }
+    if (status === 402) {
+      return {
+        ok: false,
+        limitReached: 'generations',
+        error: `You've used all ${data.limit ?? ''} free generations this week.`,
+      };
     }
-    try {
-      const client = new Anthropic({ apiKey });
-      const stream = client.messages.stream({
-        model: 'claude-opus-4-5',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      });
-      let full = '';
-      for await (const chunk of stream) {
-        if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
-          const text = chunk.delta.text;
-          full += text;
-          event.sender.send('generate:chunk', text);
-        }
-      }
-      bumpGenerations();
-      return { ok: true, text: full };
-    } catch (err) {
-      return { ok: false, error: err.message || String(err) };
+    if (status !== 200 || !data.ok) {
+      return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }
+    // The server returns the full text (not streamed). Emit it as one chunk so
+    // the popup's existing streaming UI renders it.
+    const text = data.text || '';
+    event.sender.send('generate:chunk', text);
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err.message || String(err) };
   }
-
-  // ── OpenAI path ──────────────────────────────────────────────────────────
-  if (provider === 'openai') {
-    const apiKey = keys.openaiPopup;
-    if (!apiKey) {
-      return { ok: false, error: 'OpenAI API key for popup is not configured. Please ask the administrator to add it in the API Keys settings.' };
-    }
-    const model = keys.openaiPopupModel || 'gpt-4o';
-    try {
-      const client = new OpenAI({ apiKey });
-      const stream = await client.chat.completions.create({
-        model,
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-        stream: true,
-      });
-      let full = '';
-      for await (const chunk of stream) {
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (text) {
-          full += text;
-          event.sender.send('generate:chunk', text);
-        }
-      }
-      bumpGenerations();
-      return { ok: true, text: full };
-    } catch (err) {
-      return { ok: false, error: err.message || String(err) };
-    }
-  }
-
-  // ── DeepSeek path (OpenAI-compatible API) ────────────────────────────────
-  if (provider === 'deepseek') {
-    const apiKey = keys.deepseek;
-    if (!apiKey) {
-      return { ok: false, error: 'DeepSeek API key is not configured. Please ask the administrator to add it in the API Keys settings.' };
-    }
-    const model = keys.deepseekModel || 'deepseek-v4-flash';
-    try {
-      const client = new OpenAI({ apiKey, baseURL: 'https://api.deepseek.com' });
-      const stream = await client.chat.completions.create({
-        model,
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-        stream: true,
-      });
-      let full = '';
-      for await (const chunk of stream) {
-        const text = chunk.choices[0]?.delta?.content || '';
-        if (text) {
-          full += text;
-          event.sender.send('generate:chunk', text);
-        }
-      }
-      bumpGenerations();
-      return { ok: true, text: full };
-    } catch (err) {
-      return { ok: false, error: err.message || String(err) };
-    }
-  }
-
-  return { ok: false, error: `Unknown popup provider: "${provider}". Set it to "claude", "openai" or "deepseek" in the API Keys settings.` };
 });
 
 ipcMain.handle('autofill-text', async (_e, { text, targetField }) => {
