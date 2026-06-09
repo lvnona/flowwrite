@@ -77,6 +77,14 @@ export function useAdmin(user) {
     deepseek:         '',
     deepseekModel:    'deepseek-v4-flash',
     openai:           '',
+    // ── Transcription (audio → text) ──────────────────────────────────────
+    // Which provider every platform uses for voice dictation. "openai" =
+    // hosted Whisper API. "hermes" = a self-hosted OpenAI-compatible Whisper
+    // endpoint (e.g. our Hermes/faster-whisper server).
+    transcribeProvider: 'openai',
+    hermesUrl:          '',   // e.g. http://144.126.146.220:8000/v1
+    hermesKey:          '',
+    hermesModel:        'whisper-1',  // most self-hosted servers accept this
   });
   const [billing, setBilling] = useState(BILLING_DEFAULTS);
   const [limits, setLimits] = useState(LIMITS_DEFAULTS);
@@ -339,6 +347,10 @@ export function useAdmin(user) {
           deepseek:         d.deepseek         || '',
           deepseekModel:    d.deepseekModel    || 'deepseek-v4-flash',
           openai:           d.openai           || '',
+          transcribeProvider: d.transcribeProvider || 'openai',
+          hermesUrl:          d.hermesUrl          || '',
+          hermesKey:          d.hermesKey          || '',
+          hermesModel:        d.hermesModel        || 'whisper-1',
         });
       }
     } catch { /* non-fatal */ }
@@ -355,6 +367,10 @@ export function useAdmin(user) {
       deepseek:         (keys.deepseek         || '').trim(),
       deepseekModel:    (keys.deepseekModel    || 'deepseek-v4-flash').trim(),
       openai:           (keys.openai           || '').trim(),
+      transcribeProvider: (keys.transcribeProvider || 'openai').trim(),
+      hermesUrl:          (keys.hermesUrl          || '').trim(),
+      hermesKey:          (keys.hermesKey          || '').trim(),
+      hermesModel:        (keys.hermesModel        || 'whisper-1').trim(),
     };
     await setDoc(API_KEYS_REF(), {
       ...trimmed,

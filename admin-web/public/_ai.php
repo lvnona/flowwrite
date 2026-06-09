@@ -71,13 +71,39 @@ function fw_ai_generate($keys, $prompt) {
   return fw_ai_claude($keys['anthropic'] ?? '', $prompt);
 }
 
-// Whisper transcription. $audioPath = local temp file, returns plain text.
-// IMPORTANT: Whisper detects the audio format from the upload FILENAME's
-// extension. If the filename has no (or an unsupported) extension, Whisper
-// rejects everything with "Invalid file format". So the postname MUST carry a
-// supported extension derived from the original filename / mime.
-function fw_ai_transcribe($openaiKey, $audioPath, $mime = 'application/octet-stream', $origName = '') {
-  if (!$openaiKey) throw new Exception('OpenAI (Whisper) key not configured');
+// Whisper transcription — provider-aware (OpenAI or any OpenAI-compatible
+// server like a self-hosted Hermes/faster-whisper). Picks the endpoint + auth
+// from the admin-managed config, so adding a new provider is a config change,
+// not a code release.
+//
+// IMPORTANT: Whisper-family APIs detect the audio format from the upload
+// FILENAME's extension. If the filename has no (or an unsupported) extension,
+// the server rejects everything with "Invalid file format". So the postname
+// MUST carry a supported extension derived from the original filename / mime.
+function fw_ai_transcribe($keys, $audioPath, $mime = 'application/octet-stream', $origName = '') {
+  // Backward compatibility: a string key (the old signature) is treated as the
+  // OpenAI key, so older callers still work.
+  if (is_string($keys)) {
+    $keys = ['transcribeProvider' => 'openai', 'openai' => $keys];
+  }
+  $provider = $keys['transcribeProvider'] ?? 'openai';
+
+  // Resolve endpoint, auth and model per provider.
+  if ($provider === 'hermes') {
+    $base   = rtrim($keys['hermesUrl'] ?? '', '/');
+    $apiKey = $keys['hermesKey']   ?? '';
+    $model  = $keys['hermesModel'] ?? 'whisper-1';
+    if ($base === '')   throw new Exception('Hermes URL not configured');
+    if ($apiKey === '') throw new Exception('Hermes API key not configured');
+    $endpoint = $base . '/audio/transcriptions';
+    $label    = 'Hermes';
+  } else { // openai (default)
+    $apiKey = $keys['openai'] ?? '';
+    $model  = 'whisper-1';
+    if (!$apiKey) throw new Exception('OpenAI (Whisper) key not configured');
+    $endpoint = 'https://api.openai.com/v1/audio/transcriptions';
+    $label    = 'OpenAI Whisper';
+  }
 
   $supported = ['flac','m4a','mp3','mp4','mpeg','mpga','oga','ogg','wav','webm'];
   $ext = strtolower(pathinfo($origName, PATHINFO_EXTENSION));
@@ -88,27 +114,25 @@ function fw_ai_transcribe($openaiKey, $audioPath, $mime = 'application/octet-str
     elseif (strpos($mime, 'mpeg') !== false) $ext = 'mp3';
     else                                     $ext = 'webm';
   }
-  // Whisper is picky about codec parameters in the content-type; send a clean
-  // base mime alongside the extensioned filename.
   $baseMime = strtok($mime, ';') ?: 'audio/webm';
 
-  $ch = curl_init('https://api.openai.com/v1/audio/transcriptions');
+  $ch = curl_init($endpoint);
   curl_setopt($ch, CURLOPT_POST, true);
   curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-  curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $openaiKey]);
+  curl_setopt($ch, CURLOPT_HTTPHEADER, ['Authorization: Bearer ' . $apiKey]);
   curl_setopt($ch, CURLOPT_POSTFIELDS, [
     'file'            => new CURLFile($audioPath, $baseMime, 'audio.' . $ext),
-    'model'           => 'whisper-1',
+    'model'           => $model,
     'response_format' => 'text',
   ]);
   curl_setopt($ch, CURLOPT_TIMEOUT, 120);
   $res  = curl_exec($ch);
   $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
   curl_close($ch);
-  if ($res === false) throw new Exception('Whisper request failed');
+  if ($res === false) throw new Exception("$label request failed");
   if ($code !== 200) {
     $j = json_decode($res, true);
-    throw new Exception($j['error']['message'] ?? "Whisper HTTP $code");
+    throw new Exception($j['error']['message'] ?? "$label HTTP $code");
   }
   return trim($res);
 }

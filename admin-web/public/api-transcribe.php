@@ -69,8 +69,11 @@ if (!$isPro && $used >= $wordLimit) {
 // 4. Transcribe with the admin Whisper key.
 $keys = fw_get_config_doc($cfg, 'apiKeys');
 $mime = $_FILES['audio']['type'] ?: 'application/octet-stream';
+$name = $_FILES['audio']['name'] ?? '';   // original filename → Whisper needs its extension
 try {
-  $text = fw_ai_transcribe($keys['openai'] ?? '', $_FILES['audio']['tmp_name'], $mime);
+  // Pass the whole keys array so fw_ai_transcribe can dispatch by provider
+  // (OpenAI Whisper, Hermes, future ones) without changing this endpoint.
+  $text = fw_ai_transcribe($keys, $_FILES['audio']['tmp_name'], $mime, $name);
 } catch (Exception $e) {
   http_response_code(502);
   echo json_encode(['error' => 'ai_error', 'detail' => $e->getMessage()]);

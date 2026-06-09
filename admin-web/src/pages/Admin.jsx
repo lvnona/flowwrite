@@ -1156,6 +1156,10 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
     deepseek:         '',
     deepseekModel:    'deepseek-v4-flash',
     openai:           '',
+    transcribeProvider: 'openai',
+    hermesUrl:          '',
+    hermesKey:          '',
+    hermesModel:        'whisper-1',
   });
   const [populated, setPopulated] = useState(false);
   const [busy, setBusy]   = useState(false);
@@ -1175,6 +1179,10 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
         deepseek:         apiKeys.deepseek         || '',
         deepseekModel:    apiKeys.deepseekModel    || 'deepseek-v4-flash',
         openai:           apiKeys.openai           || '',
+        transcribeProvider: apiKeys.transcribeProvider || 'openai',
+        hermesUrl:          apiKeys.hermesUrl          || '',
+        hermesKey:          apiKeys.hermesKey          || '',
+        hermesModel:        apiKeys.hermesModel        || 'whisper-1',
       });
       setPopulated(true);
     }
@@ -1321,26 +1329,115 @@ function ApiKeysSection({ apiKeys, saveApiKeys }) {
           </div>
         </div>
 
-        {/* ── Section 2: Audio Transcription ───────────────────────────── */}
+        {/* ── Section 2: Audio Transcription (voice dictation) ─────────── */}
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 flex flex-col gap-5">
           <div className="text-[10px] uppercase tracking-wider text-white/30 mb-1">
-            Audio Transcription add-on
+            Audio Transcription — voice dictation
           </div>
-          <KeyField
-            label="OpenAI API Key (Whisper)"
-            hint="Used for Fn-key voice dictation (Whisper) and grammar cleanup."
-            placeholder="sk-proj-…"
-            value={draft.openai}
-            onChange={set('openai')}
-          />
+
+          {/* Provider selector — matches the popup-AI pattern */}
+          <div>
+            <span className="block text-[10px] uppercase tracking-wider text-white/40 mb-2">
+              Transcription Provider
+            </span>
+            <div className="flex gap-2">
+              {[
+                { value: 'openai', label: 'OpenAI Whisper',   ring: 'border-emerald-400/60 bg-emerald-500/15 text-emerald-200',
+                  hint: 'Hosted Whisper API (paid · $0.006/min). Reliable, easy.' },
+                { value: 'hermes', label: 'Hermes (self-host)', ring: 'border-amber-400/60 bg-amber-500/15 text-amber-200',
+                  hint: 'Your own faster-whisper server. FREE, OpenAI-compatible.' },
+              ].map(({ value, label, ring }) => {
+                const active = draft.transcribeProvider === value;
+                return (
+                  <button key={value} type="button"
+                    onClick={() => setDraft((d) => ({ ...d, transcribeProvider: value }))}
+                    className={`flex-1 rounded-xl border px-3 py-2.5 text-sm font-medium transition
+                      ${active ? ring : 'border-white/10 bg-white/5 text-white/40 hover:text-white/60 hover:border-white/20'}`}>
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="text-[11px] text-white/40 mt-2">
+              {draft.transcribeProvider === 'hermes'
+                ? 'Routes voice dictation through your Hermes server (any OpenAI-compatible Whisper endpoint).'
+                : 'Routes voice dictation through OpenAI\'s hosted Whisper API.'}
+            </div>
+          </div>
+
+          {/* OpenAI Whisper key (shown when provider = openai) */}
+          {draft.transcribeProvider === 'openai' && (
+            <KeyField
+              label="OpenAI API Key (Whisper)"
+              hint="Used for voice dictation (Whisper) and grammar cleanup."
+              placeholder="sk-proj-…"
+              value={draft.openai}
+              onChange={set('openai')}
+            />
+          )}
+
+          {/* Hermes fields (shown when provider = hermes) */}
+          {draft.transcribeProvider === 'hermes' && (
+            <div className="flex flex-col gap-4">
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wider text-white/40">Base URL (include /v1)</span>
+                <span className="block text-[11px] text-white/30 mt-0.5 mb-1.5">
+                  e.g. <code className="text-amber-300/80">http://144.126.146.220:8000/v1</code>
+                </span>
+                <input type="text"
+                  value={draft.hermesUrl}
+                  onChange={(e) => setDraft((d) => ({ ...d, hermesUrl: e.target.value }))}
+                  placeholder="http://your-server:8000/v1"
+                  autoComplete="off" spellCheck={false}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm font-mono
+                             placeholder-white/20 focus:outline-none focus:border-amber-400/50 transition" />
+              </label>
+              <KeyField
+                label="Hermes API Key"
+                hint="The token your Hermes server requires (sent as Bearer auth)."
+                placeholder="u11-whisper-free-2026"
+                value={draft.hermesKey}
+                onChange={set('hermesKey')}
+              />
+              <label className="block">
+                <span className="text-[10px] uppercase tracking-wider text-white/40">Model</span>
+                <span className="block text-[11px] text-white/30 mt-0.5 mb-1.5">
+                  Most self-hosted servers accept <code>whisper-1</code> regardless of the loaded weights.
+                </span>
+                <input type="text"
+                  value={draft.hermesModel}
+                  onChange={(e) => setDraft((d) => ({ ...d, hermesModel: e.target.value }))}
+                  placeholder="whisper-1"
+                  autoComplete="off" spellCheck={false}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-2.5 text-sm font-mono
+                             placeholder-white/20 focus:outline-none focus:border-amber-400/50 transition" />
+              </label>
+
+              {/* OpenAI key still needed for grammar polish (gpt-4o-mini). */}
+              <div className="pt-3 border-t border-white/5">
+                <KeyField
+                  label="OpenAI API Key (for grammar polish — optional)"
+                  hint="Hermes transcribes; an OpenAI key is still used by the cleanup pass (gpt-4o-mini) to fix punctuation and remove filler words. Leave blank to skip cleanup."
+                  placeholder="sk-proj-…"
+                  value={draft.openai}
+                  onChange={set('openai')}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="pt-1 border-t border-white/5">
             <div className="text-[10px] uppercase tracking-wider text-white/25 mb-2">
               Estimated cost per transcribed word (used in Users tab)
             </div>
             <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2.5 inline-block">
               <div className="text-[10px] text-white/40 mb-0.5">Per audio word</div>
-              <div className="text-sm font-mono text-amber-300">${COST_PER_AUDIO_WORD.toFixed(6)}</div>
-              <div className="text-[10px] text-white/25 mt-0.5">Whisper est.</div>
+              <div className="text-sm font-mono text-amber-300">
+                {draft.transcribeProvider === 'hermes' ? '$0.000000' : `$${COST_PER_AUDIO_WORD.toFixed(6)}`}
+              </div>
+              <div className="text-[10px] text-white/25 mt-0.5">
+                {draft.transcribeProvider === 'hermes' ? 'Hermes self-hosted — free' : 'Whisper est.'}
+              </div>
             </div>
           </div>
         </div>
