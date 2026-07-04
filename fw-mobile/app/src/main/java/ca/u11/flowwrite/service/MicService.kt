@@ -73,18 +73,17 @@ class MicService : LifecycleService() {
         val file = File(cacheDir, "fw_rec_${System.currentTimeMillis()}.m4a")
             .also { audioFile = it }
 
-        recorder = createRecorder().apply {
-            setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-            setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-            setAudioEncodingBitRate(128_000)
-            setAudioSamplingRate(44_100)
-            setOutputFile(file.absolutePath)
-            prepare()
-            start()
-        }
+        recorder = SpeechRecorder.create(this, file).apply { start() }
 
         RecordingBus.setState(RecordingBus.State.RECORDING)
+
+        // Prefetch the Firebase ID token now, while the user is still talking,
+        // so the SDK's cached/refreshed token is ready the instant recording
+        // stops — removes a potential network round trip from the critical
+        // path between "stop talking" and "text appears."
+        lifecycleScope.launch(Dispatchers.IO) {
+            runCatching { app.auth.getIdToken(false) }
+        }
     }
 
     private fun handleStop() {
@@ -170,11 +169,6 @@ class MicService : LifecycleService() {
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
-
-    @Suppress("DEPRECATION")
-    private fun createRecorder(): MediaRecorder =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(this)
-        else MediaRecorder()
 
     private fun buildNotification(text: String): Notification =
         NotificationCompat.Builder(this, FlowWriteApp.CHANNEL_MIC)

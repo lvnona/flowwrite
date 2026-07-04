@@ -73,6 +73,7 @@ import ca.u11.flowwrite.data.PromptBuilder
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.service.FwAccessibilityService
 import ca.u11.flowwrite.service.RecordingBus
+import ca.u11.flowwrite.service.SpeechRecorder
 import ca.u11.flowwrite.ui.theme.FlowWriteTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -206,17 +207,13 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
         val file = java.io.File(fwApp.cacheDir, "fw_panel_${System.currentTimeMillis()}.m4a")
         audioFile = file
         try {
-            recorder = createRecorder().apply {
-                setAudioSource(android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION)
-                setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
-                setAudioEncodingBitRate(128_000)
-                setAudioSamplingRate(44_100)
-                setOutputFile(file.absolutePath)
-                prepare()
-                start()
-            }
+            recorder = SpeechRecorder.create(fwApp, file).apply { start() }
             _isRecording.value = true
+            // Prefetch the ID token while the user is still talking — see
+            // MicService.handleStart for why this matters.
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { fwApp.auth.getIdToken(false) }
+            }
         } catch (e: Exception) {
             _error.value = "Couldn't start microphone: ${e.message}"
             recorder?.runCatching { release() }
@@ -251,12 +248,6 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
-
-    @Suppress("DEPRECATION")
-    private fun createRecorder(): android.media.MediaRecorder =
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S)
-            android.media.MediaRecorder(fwApp)
-        else android.media.MediaRecorder()
 
     override fun onCleared() {
         recorder?.runCatching { release() }

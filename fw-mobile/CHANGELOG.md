@@ -5,6 +5,29 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.13 — versionCode 14 (2026-06-01)
+
+### Performance — faster dictation
+- **Recording is now mono/16kHz/32kbps** instead of stereo/44.1kHz/128kbps.
+  Whisper downsamples every upload to 16kHz mono internally regardless of
+  input quality, so the old settings only produced a bigger file to
+  upload for no transcription benefit. Smaller file → faster upload → text
+  appears sooner after you stop talking.
+- **The Firebase ID token is now prefetched when recording *starts***
+  (fire-and-forget, both in `MicService` and the in-panel dictation),
+  instead of being fetched cold right after you stop. This removes a
+  potential network round trip from the critical path between "stop
+  talking" and "text appears."
+- Extracted the duplicated `MediaRecorder` setup from `MicService` and
+  `GenerateActivity` into one shared `service/SpeechRecorder.kt` so both
+  paths stay tuned identically going forward.
+
+> Note: a meaningful part of end-to-end latency is server-side (sequential
+> Whisper → polish-pass calls on `api-transcribe.php`) and is outside what
+> the Android client can control.
+
+---
+
 ## 1.0.12 — versionCode 13 (2026-06-01)
 
 ### Security / architecture
