@@ -51,8 +51,6 @@ export function createDictationWindow() {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      // Keep the renderer alive when hidden so the mic/AudioContext spin up fast.
-      backgroundThrottling: false,
     },
   });
 

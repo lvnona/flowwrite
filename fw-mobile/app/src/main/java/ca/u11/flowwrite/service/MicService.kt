@@ -87,9 +87,11 @@ class MicService : LifecycleService() {
     }
 
     private fun handleStop() {
+        val tStopTapped = System.currentTimeMillis()
         recorder?.runCatching { stop() }
         recorder?.release()
         recorder = null
+        val tRecorderFinalized = System.currentTimeMillis()
 
         val file = audioFile
         if (file == null || !file.exists()) {
@@ -115,6 +117,7 @@ class MicService : LifecycleService() {
                 // Transcription, polish, limit enforcement and usage recording
                 // all happen on the proxy. We just upload the audio.
                 val result = withContext(Dispatchers.IO) { app.api.transcribe(file) }
+                val tTranscribed = System.currentTimeMillis()
 
                 // Deliver the text to the focused field.
                 RecordingBus.emitText(result.text)
@@ -131,6 +134,18 @@ class MicService : LifecycleService() {
                         RecordingBus.emitError("Text copied — enable Accessibility service for auto-insert")
                     }
                 }
+                val tInserted = System.currentTimeMillis()
+
+                // TEMP diagnostic — remove once the dominant latency source is
+                // confirmed. See ApiClient's "transcribe:" log for the network
+                // breakdown (token fetch vs. round trip).
+                android.util.Log.i(
+                    "FwLatency",
+                    "handleStop: recorderFinalizeMs=${tRecorderFinalized - tStopTapped} " +
+                        "apiCallMs=${tTranscribed - tRecorderFinalized} " +
+                        "insertMs=${tInserted - tTranscribed} " +
+                        "totalStopToInsertMs=${tInserted - tStopTapped}",
+                )
 
             } catch (e: ApiClient.LimitReachedException) {
                 RecordingBus.emitError(

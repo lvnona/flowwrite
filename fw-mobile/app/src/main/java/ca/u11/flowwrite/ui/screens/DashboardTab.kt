@@ -85,14 +85,14 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
                     icon    = Icons.Filled.AutoFixHigh,
                     label   = "Generations this week",
                     current = p.generationsThisWeek,
-                    limit   = if (p.plan == "pro") null else limits.generations,
+                    limit   = if (p.isPro) null else limits.generations,
                 )
                 Spacer(Modifier.height(10.dp))
                 UsageCard(
                     icon    = Icons.Filled.RecordVoiceOver,
                     label   = "Audio words this week",
                     current = p.audioWordsThisWeek,
-                    limit   = if (p.plan == "pro") null else limits.audioWords,
+                    limit   = if (p.isPro) null else limits.audioWords,
                 )
                 Spacer(Modifier.height(10.dp))
 

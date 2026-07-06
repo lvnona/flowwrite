@@ -56,29 +56,16 @@ if (!$state['unlimited'] && $used >= FREE_WORDS_PER_WEEK) {
   ]);
 }
 
-// ── 5. Transcribe (+ best-effort grammar polish) ────────────────────────────-
+// ── 5. Transcribe (Whisper only — polish pass removed from critical path) ────
 try {
   $text = fw_call_whisper($openaiKey, $audio['tmp_name'], $audio['name'] ?? 'dictation.m4a', $audio['type'] ?? '');
 } catch (Exception $e) {
   fw_fail(502, $e->getMessage());
 }
-$polished = fw_polish_dictation($openaiKey, $text);
-if ($polished !== null) $text = $polished;
 $text  = trim($text);
 $words = $text === '' ? 0 : count(preg_split('/\s+/', $text, -1, PREG_SPLIT_NO_EMPTY));
 
-// ── 6. Record usage (best-effort) ────────────────────────────────────────────
-if ($words > 0) {
-  $month = fw_month_key();
-  try {
-    fw_increment_user($cfg, $uid, [
-      "audioWords.$month"      => $words,
-      "audioWordsWeekly.$week" => $words,
-      'allTimeAudioWords'      => $words,
-    ]);
-  } catch (Exception $e) { /* swallow — transcription already succeeded */ }
-}
-
+// ── 6. Send response immediately, then record usage asynchronously. ───────────
 echo json_encode([
   'ok'    => true,
   'text'  => $text,
@@ -89,3 +76,18 @@ echo json_encode([
     'plan'  => $state['plan'],
   ],
 ]);
+
+if (function_exists('fastcgi_finish_request')) {
+  fastcgi_finish_request();
+}
+
+if ($words > 0) {
+  $month = fw_month_key();
+  try {
+    fw_increment_user($cfg, $uid, [
+      "audioWords.$month"      => $words,
+      "audioWordsWeekly.$week" => $words,
+      'allTimeAudioWords'      => $words,
+    ]);
+  } catch (Exception $e) { /* swallow — transcription already succeeded */ }
+}

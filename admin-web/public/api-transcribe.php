@@ -80,21 +80,13 @@ try {
   exit;
 }
 
-// Optional grammar/punctuation cleanup (client sends polish=1; default on).
-if (($_POST['polish'] ?? '1') !== '0') {
-  $text = fw_ai_polish($keys['openai'] ?? '', $text);
-}
-
-// 5. Count the words and record them (atomic). This is the +N the admin sees.
+// 5. Count words from the raw transcript and send the response to the client
+//    immediately. The grammar-polish pass (GPT-4o-mini) has moved to the
+//    desktop client (electron/main.js) so it no longer blocks this response.
+//    Android receives the raw Whisper text; the Electron app runs its own
+//    cleanup pass locally after this fast reply arrives.
 $words = fw_word_count($text);
 $nowMs = (int) round(microtime(true) * 1000);
-if ($words > 0) {
-  fw_increment_user($cfg, $uid, [
-    "audioWordsWeekly.$week"          => $words,
-    'audioWords.' . gmdate('Y-m')     => $words,
-    'allTimeAudioWords'               => $words,
-  ], ['lastSeen' => $nowMs]);
-}
 
 echo json_encode([
   'ok'    => true,
@@ -102,3 +94,21 @@ echo json_encode([
   'words' => $words,
   'usage' => ['used' => $used + $words, 'limit' => $isPro ? null : $wordLimit, 'plan' => $plan],
 ]);
+
+// Flush the HTTP response to the client NOW, before the Firestore write.
+// On PHP-FPM (nginx/LiteSpeed) fastcgi_finish_request() closes the response
+// socket while PHP keeps running — the client is unblocked immediately.
+// On mod_php this is a no-op and the Firestore write stays in the critical
+// path (adds ~100-300ms), but it's still faster than the old polish pass.
+if (function_exists('fastcgi_finish_request')) {
+  fastcgi_finish_request();
+}
+
+// 6. Record usage AFTER the client has already received the text.
+if ($words > 0) {
+  fw_increment_user($cfg, $uid, [
+    "audioWordsWeekly.$week"          => $words,
+    'audioWords.' . gmdate('Y-m')     => $words,
+    'allTimeAudioWords'               => $words,
+  ], ['lastSeen' => $nowMs]);
+}

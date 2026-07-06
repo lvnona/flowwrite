@@ -1,5 +1,6 @@
 package ca.u11.flowwrite.data
 
+import android.util.Log
 import ca.u11.flowwrite.auth.AuthRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -82,11 +83,13 @@ class ApiClient(private val auth: AuthRepository) {
      */
     suspend fun transcribe(audioFile: File, mimeType: String = "audio/mp4"): TranscribeResult =
         withContext(Dispatchers.IO) {
+            val t0 = System.currentTimeMillis()
             val token = idTokenOrThrow()
+            val tToken = System.currentTimeMillis()
+
             val multipart = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("audio", audioFile.name, audioFile.asRequestBody(mimeType.toMediaType()))
-                .addFormDataPart("polish", "1")
                 .build()
 
             val req = Request.Builder()
@@ -96,6 +99,18 @@ class ApiClient(private val auth: AuthRepository) {
                 .build()
 
             val (code, raw) = execute(req)
+            val tDone = System.currentTimeMillis()
+
+            // TEMP diagnostic logging — remove once we've identified the
+            // dominant latency source. Tag: FwLatency.
+            Log.i(
+                TAG_LATENCY,
+                "transcribe: fileBytes=${audioFile.length()} " +
+                    "tokenFetchMs=${tToken - t0} " +
+                    "networkRoundTripMs=${tDone - tToken} " +
+                    "totalMs=${tDone - t0} httpCode=$code",
+            )
+
             val json = raw.toJsonOrNull()
 
             when (code) {
@@ -152,5 +167,6 @@ class ApiClient(private val auth: AuthRepository) {
 
     companion object {
         private const val BASE = "https://flowwrite.u11.ca"
+        private const val TAG_LATENCY = "FwLatency"
     }
 }

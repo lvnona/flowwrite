@@ -251,6 +251,9 @@ async function summonPopup(position, { templateId = null } = {}) {
   const settings = store.get('settings');
   if (settings.paused) return;
 
+  // Create the popup renderer on first use if the warmup timer hasn't fired yet.
+  if (!popupWindow || popupWindow.isDestroyed()) popupWindow = createPopupWindow();
+
   const fieldContext = await readContext(position);
   if (!fieldContext) return;
 
@@ -583,8 +586,9 @@ app.whenReady().then(() => {
   }
 
   migrateTemplates();   // fold any legacy templates into the unified store
-  createMainWindow();
-  popupWindow = createPopupWindow();
+  // Popup is pre-warmed after a short delay so it's ready when the hotkey is
+  // first pressed, but doesn't block the main process or eat memory at launch.
+  setTimeout(() => { popupWindow = createPopupWindow(); }, 8_000);
   dictationWindow = createDictationWindow();
   registerDictationTrigger();
   // Sync the OS login item with the saved preference (handles app reinstalls /
@@ -1317,9 +1321,13 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType, idToken } =
       : (mimeType || '').includes('ogg') ? 'ogg'
       : 'webm';
 
+    // Server no longer runs the grammar-polish pass (it returned raw Whisper
+    // text immediately so the HTTP response is ~2-3s instead of ~5-7s).
+    // We run the cleanup pass locally here, after the fast server response,
+    // so desktop users who have polishDictation enabled still get clean text.
     const { status, body } = await serverPostMultipart(
       '/api-transcribe.php', token,
-      { polish: settings.polishDictation === false ? '0' : '1' },
+      {},
       'audio', buffer, `dictation.${ext}`, mimeType || 'audio/webm');
     let data = {};
     try { data = JSON.parse(body); } catch { /* non-JSON */ }
@@ -1334,7 +1342,19 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType, idToken } =
       return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }
 
-    const text = (data.text || '').trim();
+    let text = (data.text || '').trim();
+
+    // Local grammar/punctuation cleanup — runs after the server already
+    // responded, so it doesn't add to the server-side latency.
+    if (text && settings.polishDictation !== false) {
+      const keys = store.get('apiKeys') || {};
+      if (keys.openai) {
+        const openai = new OpenAI({ apiKey: keys.openai });
+        const polished = await polishDictation(openai, text);
+        if (polished) text = polished;
+      }
+    }
+
     // Local display stat only (Settings → Audio transcriber). The authoritative
     // per-account count lives in Firebase, written by the server — no cloud
     // bump here (that would double-count).
