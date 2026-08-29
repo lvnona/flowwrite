@@ -5,6 +5,16 @@ All notable changes to the Android app are tracked here. Versions follow
 
 ---
 
+## 1.0.14 — versionCode 15 (2026-08-29)
+
+### Required for Google Play submission
+- **Target API bumped to 36 (Android 16)**, from 35. Google Play requires all
+  **new apps and updates submitted from 31 Aug 2026** to target API 36 —
+  targeting 35 would have been rejected at upload from that date onward.
+  `compileSdk` moved to 36 to match.
+
+---
+
 ## 1.0.13 — versionCode 14 (2026-06-01)
 
 ### Performance — faster dictation

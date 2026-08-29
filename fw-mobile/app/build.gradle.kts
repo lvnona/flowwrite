@@ -16,14 +16,14 @@ val keystoreProps = Properties().apply {
 
 android {
     namespace = "ca.u11.flowwrite"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "ca.u11.flowwrite"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 14
-        versionName = "1.0.13"
+        targetSdk = 36
+        versionCode = 15
+        versionName = "1.0.14"
 
         // The FlowWrite backend base URL (PHP proxy lives at admin-web/public,
         // deployed to flowwrite.u11.ca). Override per build type if needed.
