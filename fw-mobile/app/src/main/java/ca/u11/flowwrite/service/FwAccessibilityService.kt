@@ -9,6 +9,7 @@ import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import android.widget.Toast
 
 /**
  * Tracks the currently-focused editable field and inserts transcribed text
@@ -73,9 +74,14 @@ class FwAccessibilityService : AccessibilityService() {
      * or "" if none.  Used to feed the user's input into template generation.
      */
     fun readFocusedText(): String {
-        val node = focusedNode?.refresh()?.let { focusedNode }
+        val node = focusedNode?.takeIf { it.refresh() }
             ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        return node?.text?.toString().orEmpty()
+        return try {
+            node?.text?.toString().orEmpty()
+        } finally {
+            // Recycle only freshly-obtained nodes — focusedNode is our cached copy.
+            if (node != null && node !== focusedNode) node.recycle()
+        }
     }
 
     /**
@@ -84,28 +90,46 @@ class FwAccessibilityService : AccessibilityService() {
      * Must be called on the main thread (the service callback thread).
      */
     fun insertText(text: String) {
-        val node = focusedNode?.refresh()?.let { focusedNode }
+        val node = focusedNode?.takeIf { it.refresh() }
             ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
 
-        if (node == null || !node.isEditable) {
-            // Last resort — put it on the clipboard so the user can paste
-            copyToClipboard(text)
-            return
-        }
+        try {
+            if (node == null || !node.isEditable) {
+                // Last resort — put it on the clipboard so the user can paste
+                copyToClipboard(text)
+                return
+            }
 
-        // Attempt ACTION_SET_TEXT first
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                text,
-            )
-        }
-        val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            // Never write into password/secure fields — not even via clipboard.
+            if (node.isPassword) {
+                Toast.makeText(this, "Can't insert into a secure field", Toast.LENGTH_SHORT).show()
+                return
+            }
 
-        if (!ok) {
-            // Fallback: clipboard + paste
-            copyToClipboard(text)
-            node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            // Append to the existing content rather than replacing the field.
+            val existing = node.text?.toString().orEmpty()
+            val combined = when {
+                existing.isEmpty() -> text
+                existing.endsWith(" ") || existing.endsWith("\n") -> existing + text
+                else -> "$existing $text"
+            }
+
+            // Attempt ACTION_SET_TEXT first
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    combined,
+                )
+            }
+            val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+            if (!ok) {
+                // Fallback: clipboard + paste
+                copyToClipboard(text)
+                node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            }
+        } finally {
+            if (node != null && node !== focusedNode) node.recycle()
         }
     }
 

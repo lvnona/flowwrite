@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.viewModels
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -66,9 +67,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.compose.viewModel
 import ca.u11.flowwrite.data.ApiClient
-import ca.u11.flowwrite.data.BillingLauncher
 import ca.u11.flowwrite.data.PromptBuilder
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.service.FwAccessibilityService
@@ -98,14 +97,19 @@ import kotlinx.coroutines.withContext
  */
 class GenerateActivity : ComponentActivity() {
 
+    private val vm: GenerateViewModel by viewModels()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Keep the screen on the whole time the panel is open so it can't dim or
         // lock mid-dictation (which would also interrupt recording).
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // Seed the draft with the text the bubble captured from the focused field.
+        vm.setDraft(intent.getStringExtra(EXTRA_DRAFT).orEmpty())
+
         setContent {
             FlowWriteTheme {
-                val vm: GenerateViewModel = viewModel()
                 GenerateSheet(vm = vm, onDone = { finish() })
             }
         }
@@ -157,12 +161,9 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
 
     // --- Free-plan limit lockout -------------------------------------------
 
-    /** Non-null when the user hit a free-plan limit and must upgrade. */
+    /** Non-null when the user hit a free-plan limit. */
     private val _limitReached = MutableStateFlow<LimitKind?>(null)
     val limitReached: StateFlow<LimitKind?> = _limitReached.asStateFlow()
-
-    val userUid: String   get() = fwApp.auth.currentUser?.uid ?: ""
-    val userEmail: String get() = fwApp.auth.currentUser?.email ?: ""
 
     fun clearLimit() { _limitReached.value = null }
 
@@ -184,6 +185,7 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
 
     private var recorder: android.media.MediaRecorder? = null
     private var audioFile: java.io.File? = null
+    private var recordingStartedAt = 0L
 
     init {
         val uid = fwApp.auth.currentUser?.uid
@@ -208,6 +210,7 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
         audioFile = file
         try {
             recorder = SpeechRecorder.create(fwApp, file).apply { start() }
+            recordingStartedAt = System.currentTimeMillis()
             _isRecording.value = true
             // Prefetch the ID token while the user is still talking — see
             // MicService.handleStart for why this matters.
@@ -228,6 +231,14 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
         recorder = null
         val file = audioFile ?: return
         if (!file.exists()) return
+
+        // Accidental taps / blips: too short to contain speech — skip upload.
+        val durationMs = System.currentTimeMillis() - recordingStartedAt
+        if (durationMs < 500L || file.length() < 1_024L) {
+            _error.value = "Recording too short — speak for a moment before stopping."
+            file.delete()
+            return
+        }
 
         viewModelScope.launch {
             _isTranscribing.value = true
@@ -280,7 +291,7 @@ class GenerateViewModel(app: Application) : AndroidViewModel(app) {
             _result.value = null
             try {
                 // The proxy enforces limits and records usage; on 402 it throws
-                // LimitReachedException, which we turn into the upgrade screen.
+                // LimitReachedException, which we turn into the limit screen.
                 _result.value = block()
             } catch (e: ApiClient.LimitReachedException) {
                 _limitReached.value = LimitKind.GENERATIONS
@@ -314,7 +325,6 @@ private fun GenerateSheet(vm: GenerateViewModel, onDone: () -> Unit) {
     val isTranscribing by vm.isTranscribing.collectAsState()
     val limitReached   by vm.limitReached.collectAsState()
 
-    val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Desktop-style controls
@@ -349,10 +359,6 @@ private fun GenerateSheet(vm: GenerateViewModel, onDone: () -> Unit) {
                 limitReached != null -> {
                     LimitReachedSection(
                         kind = limitReached!!,
-                        onUpgrade = {
-                            BillingLauncher.openCheckout(context, vm.userUid, vm.userEmail)
-                            onDone()
-                        },
                         onLater = onDone,
                     )
                 }
@@ -619,7 +625,6 @@ private fun TemplateRow(template: Template, isGenerating: Boolean, onUse: () -> 
 @Composable
 private fun LimitReachedSection(
     kind: LimitKind,
-    onUpgrade: () -> Unit,
     onLater: () -> Unit,
 ) {
     val what = when (kind) {
@@ -638,24 +643,17 @@ private fun LimitReachedSection(
             )
         }
         Spacer(Modifier.height(8.dp))
+        // Plain text, deliberately not a link — no purchase entry points inside
+        // the app (Play consumption-only policy).
         Text(
             "You've used all of your free $what this week. It resets Monday — " +
-                "or go Pro for unlimited generations and dictation.",
+                "or upgrade to Pro at flowwrite.u11.ca for unlimited generations and dictation.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = onUpgrade,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-        ) {
-            Icon(Icons.Filled.Star, null, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Upgrade to Pro")
-        }
         TextButton(onClick = onLater, modifier = Modifier.align(Alignment.CenterHorizontally)) {
-            Text("Maybe later")
+            Text("Close")
         }
         Spacer(Modifier.height(4.dp))
     }

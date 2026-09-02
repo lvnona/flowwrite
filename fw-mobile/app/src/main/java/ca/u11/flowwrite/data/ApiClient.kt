@@ -1,6 +1,7 @@
 package ca.u11.flowwrite.data
 
 import android.util.Log
+import ca.u11.flowwrite.BuildConfig
 import ca.u11.flowwrite.auth.AuthRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -62,7 +63,7 @@ class ApiClient(private val auth: AuthRepository) {
             .post(body)
             .build()
 
-        val (code, raw) = execute(req)
+        val (code, raw) = executeWithTokenRetry(req)
         val json = raw.toJsonOrNull()
 
         when (code) {
@@ -98,18 +99,20 @@ class ApiClient(private val auth: AuthRepository) {
                 .post(multipart)
                 .build()
 
-            val (code, raw) = execute(req)
+            val (code, raw) = executeWithTokenRetry(req)
             val tDone = System.currentTimeMillis()
 
             // TEMP diagnostic logging — remove once we've identified the
             // dominant latency source. Tag: FwLatency.
-            Log.i(
-                TAG_LATENCY,
-                "transcribe: fileBytes=${audioFile.length()} " +
-                    "tokenFetchMs=${tToken - t0} " +
-                    "networkRoundTripMs=${tDone - tToken} " +
-                    "totalMs=${tDone - t0} httpCode=$code",
-            )
+            if (BuildConfig.DEBUG) {
+                Log.i(
+                    TAG_LATENCY,
+                    "transcribe: fileBytes=${audioFile.length()} " +
+                        "tokenFetchMs=${tToken - t0} " +
+                        "networkRoundTripMs=${tDone - tToken} " +
+                        "totalMs=${tDone - t0} httpCode=$code",
+                )
+            }
 
             val json = raw.toJsonOrNull()
 
@@ -129,14 +132,25 @@ class ApiClient(private val auth: AuthRepository) {
     // Helpers
     // -----------------------------------------------------------------------
 
-    private suspend fun idTokenOrThrow(): String =
-        auth.getIdToken(false) ?: throw ApiException("Not signed in — please reopen FlowWrite.")
+    private suspend fun idTokenOrThrow(forceRefresh: Boolean = false): String =
+        auth.getIdToken(forceRefresh) ?: throw ApiException("Not signed in — please reopen FlowWrite.")
 
     /** Returns (httpCode, bodyString). */
     private fun execute(req: Request): Pair<Int, String> {
         val resp = http.newCall(req).execute()
         val text = resp.body?.string().orEmpty()
         return resp.code to text
+    }
+
+    /**
+     * Executes [req]; on a 401 the cached ID token may be stale, so force-refresh
+     * it and retry ONCE. Only if the retry also fails does the caller see the 401.
+     */
+    private suspend fun executeWithTokenRetry(req: Request): Pair<Int, String> {
+        val (code, raw) = execute(req)
+        if (code != 401) return code to raw
+        val fresh = idTokenOrThrow(forceRefresh = true)
+        return execute(req.newBuilder().header("Authorization", "Bearer $fresh").build())
     }
 
     private fun String.toJsonOrNull(): JSONObject? =
@@ -166,7 +180,7 @@ class ApiClient(private val auth: AuthRepository) {
     ) : Exception("limit_reached")
 
     companion object {
-        private const val BASE = "https://flowwrite.u11.ca"
+        private const val BASE = BuildConfig.API_BASE
         private const val TAG_LATENCY = "FwLatency"
     }
 }

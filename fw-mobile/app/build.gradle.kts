@@ -14,6 +14,11 @@ val keystoreProps = Properties().apply {
     if (keystorePropsFile.exists()) load(keystorePropsFile.inputStream())
 }
 
+// CI (GitHub Actions) can override the version with -PciVersionCode/-PciVersionName
+// so every Actions build is installable over the previous one.
+val ciVersionCode = (project.findProperty("ciVersionCode") as String?)?.toIntOrNull()
+val ciVersionName = project.findProperty("ciVersionName") as String?
+
 android {
     namespace = "ca.u11.flowwrite"
     compileSdk = 36
@@ -22,8 +27,8 @@ android {
         applicationId = "ca.u11.flowwrite"
         minSdk = 26
         targetSdk = 36
-        versionCode = 15
-        versionName = "1.0.14"
+        versionCode = ciVersionCode ?: 16
+        versionName = ciVersionName ?: "1.0.15"
 
         // The FlowWrite backend base URL (PHP proxy lives at admin-web/public,
         // deployed to flowwrite.u11.ca). Override per build type if needed.

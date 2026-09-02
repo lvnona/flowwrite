@@ -25,15 +25,21 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ca.u11.flowwrite.BuildConfig
+import ca.u11.flowwrite.data.WebPortal
+
+/** Full privacy policy, hosted on the FlowWrite site. */
+private const val PRIVACY_POLICY_URL = "https://flowwrite.u11.ca/privacy.html"
 
 /**
  * Dedicated Privacy screen — FlowWrite-style transparency about what the app
@@ -42,6 +48,7 @@ import ca.u11.flowwrite.BuildConfig
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PrivacyScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
     Scaffold(
         topBar = {
             TopAppBar(
@@ -117,12 +124,16 @@ fun PrivacyScreen(onBack: () -> Unit) {
                 ),
                 shape = RoundedCornerShape(14.dp),
             ) {
-                Text(
-                    "FlowWrite Mobile · v${BuildConfig.VERSION_NAME}\nQuestions about privacy? Contact your FlowWrite administrator.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        "FlowWrite Mobile · v${BuildConfig.VERSION_NAME}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = { WebPortal.open(context, PRIVACY_POLICY_URL) }) {
+                        Text("View full privacy policy")
+                    }
+                }
             }
 
             Spacer(Modifier.height(24.dp))

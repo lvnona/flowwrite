@@ -2,12 +2,15 @@ package ca.u11.flowwrite
 
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ca.u11.flowwrite.data.FreeLimits
 import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.data.UserProfile
+import ca.u11.flowwrite.service.BubblePrefs
+import ca.u11.flowwrite.service.BubbleService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +66,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _profile = MutableStateFlow<UserProfile?>(null)
     val profile: StateFlow<UserProfile?> = _profile.asStateFlow()
 
+    /** Non-null when loading the user profile failed — Dashboard shows a retry. */
+    private val _profileError = MutableStateFlow<String?>(null)
+    val profileError: StateFlow<String?> = _profileError.asStateFlow()
+
     private val _isSigningIn = MutableStateFlow(false)
     val isSigningIn: StateFlow<Boolean> = _isSigningIn.asStateFlow()
 
@@ -95,7 +102,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Make sure the users/{uid} doc exists (covers users whose previous
             // sign-in didn't create it — otherwise the listener would never emit
             // and the Dashboard would spin forever).
-            viewModelScope.launch { profileRepo.ensureUserDoc(user) }
+            viewModelScope.launch {
+                runCatching { profileRepo.ensureUserDoc(user) }
+                    .onFailure { _profileError.value = it.message ?: "Couldn't load your profile." }
+            }
             startProfileListener(user.uid)
             startTemplateListener(user.uid)
             navigateAfterAuth()
@@ -116,7 +126,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // CREATE users/{uid} on first sign-in (rule requires
                     // plan='free' + status='active'). Awaited so the listener
                     // emits on its first read.
-                    profileRepo.ensureUserDoc(user)
+                    runCatching { profileRepo.ensureUserDoc(user) }
+                        .onFailure { _profileError.value = it.message ?: "Couldn't load your profile." }
                     startProfileListener(user.uid)
                     startTemplateListener(user.uid)
                     navigateAfterAuth()
@@ -136,12 +147,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         profileJob?.cancel();  profileJob = null
         templateJob?.cancel(); templateJob = null
 
+        // Stop the floating bubble and forget that it was enabled, so it
+        // doesn't come back on reboot while signed out.
+        val ctx = getApplication<Application>()
+        ctx.stopService(Intent(ctx, BubbleService::class.java))
+        BubblePrefs.setEnabled(ctx, false)
+
         auth.signOut()
 
         // Clear all per-user in-memory state so the next sign-in starts clean
         // (no stale templates flashing through).
-        _profile.value   = null
-        _templates.value = emptyList()
+        _profile.value      = null
+        _profileError.value = null
+        _templates.value    = emptyList()
 
         _screen.value = AppScreen.SignIn
     }
@@ -201,9 +219,24 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Surface to logcat so a Dashboard stuck on null is debuggable.
                     // Common causes: PERMISSION_DENIED or users/{uid} not yet created.
                     android.util.Log.e("FwProfile", "userProfileFlow error: ${e.message}", e)
+                    _profileError.value = e.message ?: "Couldn't load your profile."
                 }
-                .collectLatest { profile -> _profile.value = profile }
+                .collectLatest { profile ->
+                    _profileError.value = null
+                    _profile.value = profile
+                }
         }
+    }
+
+    /** Re-runs profile doc creation + listener (Dashboard "Retry" button). */
+    fun retryProfileLoad() {
+        val user = auth.currentUser ?: return
+        _profileError.value = null
+        viewModelScope.launch {
+            runCatching { profileRepo.ensureUserDoc(user) }
+                .onFailure { _profileError.value = it.message ?: "Couldn't load your profile." }
+        }
+        startProfileListener(user.uid)
     }
 
     private fun startTemplateListener(uid: String) {

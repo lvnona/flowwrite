@@ -1,14 +1,20 @@
 package ca.u11.flowwrite.service
 
+import android.Manifest
 import android.app.Notification
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioFocusRequest
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import ca.u11.flowwrite.BuildConfig
 import ca.u11.flowwrite.FlowWriteApp
 import ca.u11.flowwrite.R
 import ca.u11.flowwrite.data.ApiClient
@@ -35,11 +41,31 @@ class MicService : LifecycleService() {
 
     private var recorder: MediaRecorder? = null
     private var audioFile: File? = null
+    private var recordingStartedAt = 0L
+
+    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
+    private var focusRequest: AudioFocusRequest? = null
+
+    /** Another app took audio focus mid-recording — stop and discard. */
+    private val focusChangeListener = AudioManager.OnAudioFocusChangeListener { change ->
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK ->
+                if (recorder != null) {
+                    discardRecording("Recording interrupted by another app — discarded.")
+                }
+        }
+    }
 
     companion object {
         const val ACTION_START = "ca.u11.flowwrite.MIC_START"
         const val ACTION_STOP  = "ca.u11.flowwrite.MIC_STOP"
         private const val NOTIF_ID = 2
+
+        // Recordings shorter/smaller than this are accidental — not uploaded.
+        private const val MIN_DURATION_MS = 500L
+        private const val MIN_FILE_BYTES  = 1_024L
 
         fun startIntent(context: Context) =
             Intent(context, MicService::class.java).apply { action = ACTION_START }
@@ -68,12 +94,42 @@ class MicService : LifecycleService() {
     private fun handleStart() {
         if (recorder != null) return   // already recording
 
+        // Crash guard: the service can be started (bubble tap, boot restore)
+        // without the runtime mic permission. Bail out instead of crashing.
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            RecordingBus.emitError("Microphone permission missing — grant it in FlowWrite settings.")
+            stopSelf()
+            return
+        }
+
+        // Audio focus: duck other audio while dictating; without it, don't record.
+        if (!requestAudioFocus()) {
+            RecordingBus.emitError("Couldn't start recording — another app is using the mic.")
+            stopSelf()
+            return
+        }
+
         startForegroundCompat(buildNotification(getString(R.string.notif_recording)))
 
         val file = File(cacheDir, "fw_rec_${System.currentTimeMillis()}.m4a")
             .also { audioFile = it }
 
-        recorder = SpeechRecorder.create(this, file).apply { start() }
+        try {
+            recorder = SpeechRecorder.create(this, file).apply { start() }
+            recordingStartedAt = System.currentTimeMillis()
+        } catch (e: Exception) {
+            recorder?.runCatching { release() }
+            recorder = null
+            file.delete()
+            audioFile = null
+            RecordingBus.setState(RecordingBus.State.IDLE)
+            RecordingBus.emitError("Couldn't start microphone: ${e.message}")
+            abandonAudioFocus()
+            stopSelf()
+            return
+        }
 
         RecordingBus.setState(RecordingBus.State.RECORDING)
 
@@ -91,12 +147,21 @@ class MicService : LifecycleService() {
         recorder?.runCatching { stop() }
         recorder?.release()
         recorder = null
+        abandonAudioFocus()
         val tRecorderFinalized = System.currentTimeMillis()
 
         val file = audioFile
         if (file == null || !file.exists()) {
             RecordingBus.setState(RecordingBus.State.IDLE)
             stopSelf()
+            return
+        }
+
+        // Accidental taps / blips: too short to contain speech — skip upload.
+        val durationMs = tStopTapped - recordingStartedAt
+        if (durationMs < MIN_DURATION_MS || file.length() < MIN_FILE_BYTES) {
+            RecordingBus.emitError("Recording too short — speak for a moment before stopping.")
+            cleanup(file)
             return
         }
 
@@ -139,18 +204,19 @@ class MicService : LifecycleService() {
                 // TEMP diagnostic — remove once the dominant latency source is
                 // confirmed. See ApiClient's "transcribe:" log for the network
                 // breakdown (token fetch vs. round trip).
-                android.util.Log.i(
-                    "FwLatency",
-                    "handleStop: recorderFinalizeMs=${tRecorderFinalized - tStopTapped} " +
-                        "apiCallMs=${tTranscribed - tRecorderFinalized} " +
-                        "insertMs=${tInserted - tTranscribed} " +
-                        "totalStopToInsertMs=${tInserted - tStopTapped}",
-                )
+                if (BuildConfig.DEBUG) {
+                    android.util.Log.i(
+                        "FwLatency",
+                        "handleStop: recorderFinalizeMs=${tRecorderFinalized - tStopTapped} " +
+                            "apiCallMs=${tTranscribed - tRecorderFinalized} " +
+                            "insertMs=${tInserted - tTranscribed} " +
+                            "totalStopToInsertMs=${tInserted - tStopTapped}",
+                    )
+                }
 
             } catch (e: ApiClient.LimitReachedException) {
                 RecordingBus.emitError(
-                    "Weekly dictation limit reached. Resets Monday — " +
-                        "open FlowWrite to upgrade to Pro for unlimited."
+                    "Word limit reached — upgrade at flowwrite.u11.ca (resets Monday)."
                 )
             } catch (e: ApiClient.ApiException) {
                 RecordingBus.emitError(e.message ?: "Transcription error")
@@ -166,6 +232,32 @@ class MicService : LifecycleService() {
     // Cleanup
     // -----------------------------------------------------------------------
 
+    /** Stops and deletes an in-progress recording (e.g. lost audio focus). */
+    private fun discardRecording(message: String) {
+        recorder?.runCatching { stop() }
+        recorder?.release()
+        recorder = null
+        audioFile?.delete()
+        audioFile = null
+        abandonAudioFocus()
+        RecordingBus.setState(RecordingBus.State.IDLE)
+        RecordingBus.emitError(message)
+        stopSelf()
+    }
+
+    private fun requestAudioFocus(): Boolean {
+        val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setOnAudioFocusChangeListener(focusChangeListener)
+            .build()
+        focusRequest = req
+        return audioManager.requestAudioFocus(req) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonAudioFocus() {
+        focusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        focusRequest = null
+    }
+
     private fun cleanup(file: File?) {
         file?.delete()
         audioFile = null
@@ -178,6 +270,7 @@ class MicService : LifecycleService() {
         recorder?.release()
         recorder = null
         audioFile?.delete()
+        abandonAudioFocus()
         super.onDestroy()
     }
 

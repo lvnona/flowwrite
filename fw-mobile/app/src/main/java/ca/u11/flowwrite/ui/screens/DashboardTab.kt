@@ -34,6 +34,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,20 +46,36 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import ca.u11.flowwrite.MainViewModel
-import ca.u11.flowwrite.data.BillingLauncher
 import ca.u11.flowwrite.data.UserProfile
 import ca.u11.flowwrite.service.BubbleService
 
 @Composable
 fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
-    val profile  by vm.profile.collectAsState()
-    val limits   by vm.limits.collectAsState()    // live, admin-managed
-    val context  = LocalContext.current
+    val profile      by vm.profile.collectAsState()
+    val profileError by vm.profileError.collectAsState()
+    val limits       by vm.limits.collectAsState()    // live, admin-managed
+    val context      = LocalContext.current
 
     var bubbleRunning by remember { mutableStateOf(BubbleService.isRunning) }
+
+    // Re-check the bubble's real state whenever we come back to the foreground
+    // (the service can be started/stopped outside this screen).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                bubbleRunning = BubbleService.isRunning
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Column(
         modifier = Modifier
@@ -73,7 +90,17 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
         when (val p = profile) {
             null -> {
                 Spacer(Modifier.height(48.dp))
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                if (profileError != null) {
+                    Text(
+                        "Couldn't load your profile: $profileError",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = { vm.retryProfileLoad() }) { Text("Retry") }
+                } else {
+                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                }
             }
             else -> {
                 // Plan + email
@@ -89,10 +116,12 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
                 )
                 Spacer(Modifier.height(10.dp))
                 UsageCard(
-                    icon    = Icons.Filled.RecordVoiceOver,
-                    label   = "Audio words this week",
-                    current = p.audioWordsThisWeek,
-                    limit   = if (p.isPro) null else limits.audioWords,
+                    icon        = Icons.Filled.RecordVoiceOver,
+                    label       = "Audio words this week",
+                    current     = p.audioWordsThisWeek,
+                    limit       = if (p.isPro) null else limits.audioWords,
+                    warningText = "You're nearing your word limit",
+                    reachedText = "Weekly word limit reached — upgrade to Pro at flowwrite.u11.ca",
                 )
                 Spacer(Modifier.height(10.dp))
 
@@ -125,10 +154,12 @@ fun DashboardTab(vm: MainViewModel, innerPadding: PaddingValues) {
 // Sub-composables
 // ---------------------------------------------------------------------------
 
+/** Amber accent for the >=80% usage-warning state (M3 has no warning color). */
+private val Amber = Color(0xFFF9A825)
+
 @Composable
 private fun PlanCard(profile: UserProfile) {
     val isPro = profile.plan == "pro" || profile.plan == "team"
-    val context = LocalContext.current
 
     // Friendly subscription-status line. Non-empty values commonly seen from
     // Stripe webhooks: active, trialing, canceled, past_due, incomplete, unpaid.
@@ -186,25 +217,13 @@ private fun PlanCard(profile: UserProfile) {
                 }
             }
             Spacer(Modifier.height(12.dp))
-            if (isPro) {
-                OutlinedButton(
-                    onClick = { BillingLauncher.openBillingPortal(context, profile.uid) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape    = RoundedCornerShape(10.dp),
-                ) { Text("Manage subscription") }
-            } else {
-                Button(
-                    onClick = {
-                        BillingLauncher.openCheckout(context, profile.uid, profile.email)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape    = RoundedCornerShape(10.dp),
-                ) {
-                    Icon(Icons.Filled.Star, null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text("Upgrade to Pro")
-                }
-            }
+            // Display-only: no purchase or payment entry points inside the app
+            // (Play consumption-only policy). Plain text, deliberately not a link.
+            Text(
+                "Manage your plan at flowwrite.u11.ca",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -215,8 +234,17 @@ private fun UsageCard(
     label: String,
     current: Int,
     limit: Int?,
+    warningText: String? = null,
+    reachedText: String? = null,
 ) {
     val fraction = if (limit != null && limit > 0) current.toFloat() / limit.toFloat() else 0f
+    val reached = limit != null && limit > 0 && current >= limit
+    val warning = !reached && fraction >= 0.8f
+    val accent = when {
+        reached -> MaterialTheme.colorScheme.error
+        warning -> Amber
+        else    -> MaterialTheme.colorScheme.primary
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -236,10 +264,10 @@ private fun UsageCard(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    if (limit == null) "$current / ∞" else "$current / $limit",
+                    if (limit == null) "%,d / ∞".format(current)
+                    else "%,d / %,d".format(current, limit),
                     style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = if (fraction > 0.85f) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onSurface,
+                    color = if (warning || reached) accent else MaterialTheme.colorScheme.onSurface,
                 )
             }
             if (limit != null) {
@@ -250,9 +278,23 @@ private fun UsageCard(
                         .fillMaxWidth()
                         .height(6.dp)
                         .clip(RoundedCornerShape(3.dp)),
-                    color = if (fraction > 0.85f) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.primary,
+                    color = accent,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                )
+            }
+            if (reached && reachedText != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    reachedText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (warning && warningText != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    warningText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Amber,
                 )
             }
         }

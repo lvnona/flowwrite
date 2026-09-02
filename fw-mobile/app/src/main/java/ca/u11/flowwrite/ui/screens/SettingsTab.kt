@@ -31,7 +31,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
@@ -44,6 +43,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -55,11 +55,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import ca.u11.flowwrite.BuildConfig
-import ca.u11.flowwrite.data.WebPortal
 
 /**
  * Settings tab — always accessible from HomeScreen bottom nav.
@@ -93,6 +95,17 @@ fun SettingsTab(innerPadding: PaddingValues) {
 
     // Re-evaluate permissions every time we return from a system settings screen
     var tick by remember { mutableIntStateOf(0) }
+
+    // Bump the tick on resume — not when launching settings — so the row reads
+    // the freshly-granted state instead of the stale one.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) tick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val hasOverlay = remember(tick) { Settings.canDrawOverlays(context) }
 
@@ -131,20 +144,6 @@ fun SettingsTab(innerPadding: PaddingValues) {
     ) {
         Spacer(Modifier.height(8.dp))
 
-        SectionHeader("Account")
-        Spacer(Modifier.height(8.dp))
-
-        NavRow(
-            icon        = Icons.Filled.Language,
-            title       = "Manage account online",
-            description = "View stats, manage templates and your subscription on any device.",
-            onClick     = { WebPortal.open(context) },
-        )
-
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Spacer(Modifier.height(20.dp))
-
         SectionHeader("Permissions")
         Spacer(Modifier.height(8.dp))
 
@@ -160,7 +159,6 @@ fun SettingsTab(innerPadding: PaddingValues) {
                         Uri.parse("package:${context.packageName}"),
                     )
                 )
-                tick++
             },
         )
 

@@ -1,10 +1,12 @@
 package ca.u11.flowwrite.service
 
+import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Notification
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -22,6 +24,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import ca.u11.flowwrite.FlowWriteApp
@@ -115,7 +118,10 @@ class BubbleService : LifecycleService() {
         pulseAnim?.cancel()
         longPressHandler.removeCallbacksAndMessages(null)
         if (::bubbleRoot.isInitialized) runCatching { windowManager.removeView(bubbleRoot) }
-        runCatching { stopService(Intent(this, MicService::class.java)) }
+        // Don't kill an in-flight recording — let MicService finish its upload.
+        if (RecordingBus.state.value == RecordingBus.State.IDLE) {
+            runCatching { stopService(Intent(this, MicService::class.java)) }
+        }
         RecordingBus.setState(RecordingBus.State.IDLE)
         super.onDestroy()
     }
@@ -163,7 +169,13 @@ class BubbleService : LifecycleService() {
 
         // Start hidden — revealed when an editable field gains focus
         bubbleRoot.visibility = View.INVISIBLE
-        windowManager.addView(bubbleRoot, params)
+        runCatching { windowManager.addView(bubbleRoot, params) }
+            .onFailure {
+                // Overlay permission revoked mid-flight — disable instead of
+                // crash-looping on every boot restore.
+                BubblePrefs.setEnabled(this, false)
+                stopSelf()
+            }
     }
 
     // -----------------------------------------------------------------------
@@ -206,7 +218,20 @@ class BubbleService : LifecycleService() {
 
     private fun onTap() {
         when (RecordingBus.state.value) {
-            RecordingBus.State.IDLE       -> startForegroundService(MicService.startIntent(this))
+            RecordingBus.State.IDLE -> {
+                // Starting a mic foreground service without the permission crashes.
+                if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                    startForegroundService(MicService.startIntent(this))
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Microphone permission missing — open FlowWrite to grant it.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
             RecordingBus.State.RECORDING  -> startService(MicService.stopIntent(this))
             RecordingBus.State.PROCESSING -> { /* wait */ }
         }
@@ -219,6 +244,8 @@ class BubbleService : LifecycleService() {
         startActivity(
             Intent(this, GenerateActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                // Seed the panel's draft with the field's current text (the topic).
+                putExtra(GenerateActivity.EXTRA_DRAFT, FwAccessibilityService.instance?.readFocusedText())
             }
         )
     }

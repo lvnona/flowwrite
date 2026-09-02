@@ -37,17 +37,6 @@ object RecordingBus {
     fun setState(s: State) { _state.value = s }
 
     // -----------------------------------------------------------------------
-    // Commands from BubbleService → MicService
-    // -----------------------------------------------------------------------
-
-    enum class Command { START, STOP }
-
-    private val _commands = MutableSharedFlow<Command>(extraBufferCapacity = 1)
-    val commands: SharedFlow<Command> = _commands.asSharedFlow()
-
-    fun sendCommand(cmd: Command) { _commands.tryEmit(cmd) }
-
-    // -----------------------------------------------------------------------
     // Transcribed text from MicService → FwAccessibilityService
     // (handled inline via FwAccessibilityService.instance, but kept here as
     //  an observable for future UI feedback / history features)

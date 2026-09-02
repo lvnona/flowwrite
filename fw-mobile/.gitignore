@@ -18,3 +18,4 @@ app/keystore.properties
 # Keep the placeholder so the project builds; replace with the real file from
 # the Firebase console (do NOT commit the real one if it contains secrets).
 # app/google-services.json
+.kotlin/

@@ -106,9 +106,68 @@ jobs:
             dist/*.blockmap
           retention-days: 30
 
+  # ── Android (release APK for testing + AAB for Play) ──────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Decode release keystore (only if secrets are set)
+        working-directory: fw-mobile/app
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > flowwrite-upload.jks
+            {
+              echo "storeFile=flowwrite-upload.jks"
+              echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+              echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
+              echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
+            } > keystore.properties
+            echo "Keystore found -> signed release build."
+          else
+            echo "No ANDROID_KEYSTORE_* secrets -> unsigned release build (won't install over a signed install)."
+          fi
+
+      - name: Compute CI version
+        run: |
+          # versionCode is run-based so every CI build is newer than the last;
+          # it stays far above the local/dev codes in app/build.gradle.kts.
+          echo "CI_VERSION_CODE=$((1000 + ${{ github.run_number }}))" >> "$GITHUB_ENV"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "CI_VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "CI_VERSION_NAME=1.0.15-ci${{ github.run_number }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release APK + AAB
+        working-directory: fw-mobile
+        run: ./gradlew :app:assembleRelease :app:bundleRelease -PciVersionCode=$CI_VERSION_CODE -PciVersionName=$CI_VERSION_NAME
+
+      - name: Rename artifacts
+        run: |
+          cp fw-mobile/app/build/outputs/apk/release/app-release.apk fw-mobile/FlowWrite-android.apk
+          cp fw-mobile/app/build/outputs/bundle/release/app-release.aab fw-mobile/FlowWrite-android.aab
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlowWrite-android
+          # .apk = sideload for testing; .aab = Play Console upload.
+          path: |
+            fw-mobile/FlowWrite-android.apk
+            fw-mobile/FlowWrite-android.aab
+          retention-days: 30
+
   # ── GitHub Release (only on version tags: v1.0.0, v1.2.3 …) ─────────────
   release:
-    needs: [build-mac, build-win]
+    needs: [build-mac, build-win, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -126,6 +185,12 @@ jobs:
           name: FlowWrite-win
           path: release-assets
 
+      - name: Download Android artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FlowWrite-android
+          path: release-assets
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -138,6 +203,8 @@ jobs:
             | macOS (Apple Silicon) | [FlowWrite-mac.dmg](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-mac.dmg) |
             | Windows 64-bit (installer) | [FlowWrite-win-setup.exe](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-setup.exe) |
             | Windows 64-bit (portable, no install) | [FlowWrite-win-portable.zip](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-win-portable.zip) |
+            | Android (sideload APK) | [FlowWrite-android.apk](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-android.apk) |
+            | Android (Play Console AAB) | [FlowWrite-android.aab](https://github.com/${{ github.repository }}/releases/latest/download/FlowWrite-android.aab) |
 
             > **These URLs always point to the latest version.**
 
@@ -160,6 +227,11 @@ jobs:
             2. Extract anywhere (Desktop, USB stick, OneDrive — your choice)
             3. Open the extracted folder and double-click `FlowWrite.exe`
             4. No installation, no admin rights needed. To "uninstall" — just delete the folder.
+
+            ### Android install (sideload / testing)
+            1. Download `FlowWrite-android.apk` on your phone
+            2. Open it and allow "install from this source" when prompted
+            (For Play Store submission, upload `FlowWrite-android.aab` to the Play Console.)
           draft: false
           prerelease: false
           files: |
@@ -167,6 +239,8 @@ jobs:
             release-assets/FlowWrite-mac.zip
             release-assets/FlowWrite-win-setup.exe
             release-assets/FlowWrite-win-portable.zip
+            release-assets/FlowWrite-android.apk
+            release-assets/FlowWrite-android.aab
             release-assets/latest-mac.yml
             release-assets/latest.yml
             release-assets/*.blockmap

@@ -1,5 +1,7 @@
 package ca.u11.flowwrite.data
 
+import android.os.Handler
+import android.os.Looper
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.ListenerRegistration
@@ -61,9 +63,15 @@ class LimitsRepository {
         firestoreReg = db.collection("config").document("limits")
             .addSnapshotListener { snap, error ->
                 if (error != null) {
-                    // Permission still propagating on cold start — let the auth
-                    // listener re-attach us on the next state change.
+                    // Permission still propagating on cold start, or a transient
+                    // network error — detach and retry shortly instead of giving
+                    // up until the next auth state change.
                     detachFirestoreListener()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        // attachFirestoreListener() no-ops if already attached;
+                        // skip when signed out (auth listener will re-attach).
+                        if (auth.currentUser != null) attachFirestoreListener()
+                    }, RETRY_DELAY_MS)
                     return@addSnapshotListener
                 }
                 if (snap != null && snap.exists()) {
@@ -79,5 +87,9 @@ class LimitsRepository {
     private fun detachFirestoreListener() {
         firestoreReg?.remove()
         firestoreReg = null
+    }
+
+    companion object {
+        private const val RETRY_DELAY_MS = 30_000L
     }
 }
