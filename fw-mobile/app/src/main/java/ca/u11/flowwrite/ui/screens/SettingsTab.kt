@@ -2,6 +2,7 @@ package ca.u11.flowwrite.ui.screens
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -55,7 +56,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -240,6 +244,14 @@ fun SettingsTab(innerPadding: PaddingValues) {
             }
         }
 
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(20.dp))
+
+        SectionHeader("Diagnostics")
+        Spacer(Modifier.height(8.dp))
+        DiagnosticsCard(tick)
+
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -410,5 +422,50 @@ private fun AboutRow(label: String, value: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+/**
+ * Shows the most recent insertion diagnostic captured by FwAccessibilityService
+ * (prefs "fw_diag"/"lastInsert"). Lets the user copy the dump so placeholder
+ * leaks (e.g. WhatsApp's "Message") can be debugged from a real device.
+ * Re-reads on [tick] — which bumps on ON_RESUME — so dictating and coming back
+ * shows the fresh dump.
+ */
+@Composable
+private fun DiagnosticsCard(tick: Int) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val dump = remember(tick) {
+        context.getSharedPreferences("fw_diag", Context.MODE_PRIVATE)
+            .getString("lastInsert", null)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "Last insertion diagnostic",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                dump ?: "No diagnostic captured yet — dictate into any field, then come back here.",
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (dump != null) {
+                TextButton(
+                    onClick = { clipboard.setText(AnnotatedString(dump)) },
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text("Copy") }
+            }
+        }
     }
 }

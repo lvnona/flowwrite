@@ -3,6 +3,7 @@ package ca.u11.flowwrite.service
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -87,6 +88,11 @@ class FwAccessibilityService : AccessibilityService() {
     /**
      * Insert [text] into the last-known focused editable field.
      *
+     * Deliberately verbatim-REPLACE: the field's content is set to exactly the
+     * dictated text — no append, no cursor insertion, nothing preserved. The
+     * user wants "ONLY TRANSCRIBE, nothing else" (signatures and prior field
+     * content are intentionally overwritten).
+     *
      * Must be called on the main thread (the service callback thread).
      */
     fun insertText(text: String) {
@@ -95,6 +101,7 @@ class FwAccessibilityService : AccessibilityService() {
 
         try {
             if (node == null || !node.isEditable) {
+                dumpInsertDiagnostics(node, "clipboard_fallback_no_editable_node", null)
                 // Last resort — put it on the clipboard so the user can paste
                 copyToClipboard(text)
                 return
@@ -102,63 +109,30 @@ class FwAccessibilityService : AccessibilityService() {
 
             // Never write into password/secure fields — not even via clipboard.
             if (node.isPassword) {
+                dumpInsertDiagnostics(node, "password_bail", null)
                 Toast.makeText(this, "Can't insert into a secure field", Toast.LENGTH_SHORT).show()
                 return
             }
 
-            // Append/insert into the existing content rather than replacing
-            // the field. existingTextOf filters out placeholders/labels that
-            // aren't real user content, so nothing is ever prepended.
-            val existing = existingTextOf(node)
-            val selStart = node.textSelectionStart
-            val selEnd   = node.textSelectionEnd
-            val canInsertAtCursor = existing.isNotEmpty() &&
-                selStart >= 0 && selEnd >= selStart && selEnd <= existing.length
-
-            var cursorAfter = -1
-            val combined = when {
-                // Untouched field (or only a placeholder) — just the dictation.
-                existing.isEmpty() -> text
-                // Insert at the cursor, like a keyboard would — keeps content
-                // after the cursor (e.g. Samsung Email's "Sent from my Galaxy"
-                // signature) after the dictated text instead of mangling it.
-                canInsertAtCursor -> {
-                    val before = existing.substring(0, selStart)
-                    val after  = existing.substring(selEnd)
-                    val sep = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
-                    cursorAfter = before.length + sep.length + text.length
-                    before + sep + text + after
-                }
-                // No valid cursor — append at the end with one separating space.
-                existing.last().isWhitespace() -> existing + text
-                else -> "$existing $text"
-            }
+            var branch = "set_text_replace"
 
             // Attempt ACTION_SET_TEXT first
             val args = Bundle().apply {
                 putCharSequence(
                     AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                    combined,
+                    text,
                 )
             }
             val ok = node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
 
             if (!ok) {
+                branch = "clipboard_fallback_set_text_failed"
                 // Fallback: clipboard + paste
                 copyToClipboard(text)
                 node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-            } else if (cursorAfter >= 0) {
-                // Put the cursor right after the inserted text so consecutive
-                // dictations continue from there. Best-effort — some fields
-                // reject SET_SELECTION, which is harmless.
-                node.performAction(
-                    AccessibilityNodeInfo.ACTION_SET_SELECTION,
-                    Bundle().apply {
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursorAfter)
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursorAfter)
-                    },
-                )
             }
+
+            dumpInsertDiagnostics(node, branch, text)
         } finally {
             if (node != null && node !== focusedNode) node.recycle()
         }
@@ -334,6 +308,73 @@ class FwAccessibilityService : AccessibilityService() {
         val label = node.contentDescription?.toString()
         if (label != null && text == label) return ""
         return text
+    }
+
+    /**
+     * TEMP diagnostic — captures what the target field looked like at insert
+     * time (hint/label exposure, selection, branch taken, children) so
+     * placeholder-leak reports (e.g. WhatsApp "Message") are debuggable from
+     * the user's device.  Persisted to the "fw_diag" prefs (key "lastInsert",
+     * overwritten each insert) and viewable/copyable under Settings →
+     * Diagnostics.  Never fails the insertion — everything is best-effort.
+     */
+    private fun dumpInsertDiagnostics(
+        node: AccessibilityNodeInfo?,
+        branch: String,
+        setTextArg: String?,
+    ) {
+        runCatching {
+            fun q(s: CharSequence?): String = if (s == null) "null" else "\"$s\""
+
+            val sb = StringBuilder()
+            sb.append("time=").append(
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                    .format(java.util.Date())
+            ).append('\n')
+            sb.append("branch=").append(branch).append('\n')
+
+            if (node == null) {
+                sb.append("node=null")
+            } else {
+                sb.append("pkg=").append(node.packageName).append('\n')
+                sb.append("class=").append(node.className).append('\n')
+                sb.append("editable=").append(node.isEditable)
+                    .append(" showingHint=").append(node.isShowingHintText)
+                    .append(" password=").append(node.isPassword)
+                    .append(" focusable=").append(node.isFocusable).append('\n')
+                sb.append("hintText=").append(q(node.hintText)).append('\n')
+                sb.append("contentDescription=").append(q(node.contentDescription)).append('\n')
+                val t = node.text?.toString()
+                sb.append("text=").append(q(t)).append(" len=").append(t?.length ?: 0).append('\n')
+                sb.append("selection=").append(node.textSelectionStart)
+                    .append("..").append(node.textSelectionEnd).append('\n')
+                val ex = existingTextOf(node)
+                sb.append("existingTextOf=").append(q(ex)).append(" len=").append(ex.length).append('\n')
+                if (setTextArg != null) {
+                    sb.append("setTextArg=").append(q(setTextArg))
+                        .append(" len=").append(setTextArg.length).append('\n')
+                }
+                // WhatsApp-style composers may expose the hint via a CHILD view
+                // rather than on the editable node itself.
+                val n = node.childCount
+                if (n in 1..10) {
+                    for (i in 0 until n) {
+                        val c = node.getChild(i) ?: continue
+                        val ct = c.text?.toString()
+                        sb.append("child[$i] class=").append(c.className)
+                            .append(" text=").append(q(ct?.take(80)))
+                        if (ct != null && ct.length > 80) sb.append("…")
+                        sb.append('\n')
+                        c.recycle()
+                    }
+                } else if (n > 10) {
+                    sb.append("children=").append(n).append(" (too many, not dumped)").append('\n')
+                }
+            }
+
+            getSharedPreferences("fw_diag", Context.MODE_PRIVATE)
+                .edit().putString("lastInsert", sb.toString().trim()).apply()
+        }
     }
 
     private fun copyToClipboard(text: String) {
