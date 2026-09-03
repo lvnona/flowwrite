@@ -77,11 +77,7 @@ class FwAccessibilityService : AccessibilityService() {
         val node = focusedNode?.takeIf { it.refresh() }
             ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         return try {
-            // An empty field reports its PLACEHOLDER as the node text (e.g.
-            // WhatsApp's composer reports "Message") — isShowingHintText tells
-            // us the text is a hint, not user content. Never read the hint.
-            if (node == null || node.isShowingHintText) ""
-            else node.text?.toString().orEmpty()
+            node?.let { existingTextOf(it) }.orEmpty()
         } finally {
             // Recycle only freshly-obtained nodes — focusedNode is our cached copy.
             if (node != null && node !== focusedNode) node.recycle()
@@ -111,13 +107,12 @@ class FwAccessibilityService : AccessibilityService() {
             }
 
             // Append to the existing content rather than replacing the field.
-            // Guard: an empty field reports its placeholder as the node text
-            // (WhatsApp's composer reports "Message") — the hint is NOT user
-            // content, so never prepend it to the dictated text.
-            val existing = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
+            // existingTextOf filters out placeholders/labels that aren't real
+            // user content, so nothing is ever prepended to the dictation.
+            val existing = existingTextOf(node)
             val combined = when {
                 existing.isEmpty() -> text
-                existing.endsWith(" ") || existing.endsWith("\n") -> existing + text
+                existing.last().isWhitespace() -> existing + text
                 else -> "$existing $text"
             }
 
@@ -286,6 +281,30 @@ class FwAccessibilityService : AccessibilityService() {
     private fun scheduleHideRecheck() {
         handler.removeCallbacks(hideRunnable)
         handler.postDelayed(hideRunnable, HIDE_DELAY_MS)
+    }
+
+    /**
+     * The field's real user content, or "" when the field only LOOKS like it
+     * has text. Placeholders leak in through the accessibility node as if they
+     * were typed content (e.g. WhatsApp's composer reports "Message"):
+     *  - isShowingHintText — the reported text IS the placeholder (API 26+).
+     *  - text == hintText — some WebViews/custom editors set hintText but don't
+     *    reliably report isShowingHintText.
+     *  - text == contentDescription — some custom editors render their label
+     *    as the node text (e.g. social-app composers).
+     * If the user genuinely typed exactly the hint/label string we treat the
+     * field as untouched — an acceptable cost vs. prepending junk to dictation.
+     * Used by both [insertText] and [readFocusedText] so the rules stay in sync.
+     */
+    private fun existingTextOf(node: AccessibilityNodeInfo): String {
+        if (node.isShowingHintText) return ""
+        val text = node.text?.toString().orEmpty()
+        if (text.isEmpty()) return ""
+        val hint = node.hintText?.toString()
+        if (hint != null && text == hint) return ""
+        val label = node.contentDescription?.toString()
+        if (label != null && text == label) return ""
+        return text
     }
 
     private fun copyToClipboard(text: String) {
