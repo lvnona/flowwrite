@@ -143,7 +143,7 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "CI_VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           else
-            echo "CI_VERSION_NAME=1.0.15-ci${{ github.run_number }}" >> "$GITHUB_ENV"
+            echo "CI_VERSION_NAME=1.0.16-ci${{ github.run_number }}" >> "$GITHUB_ENV"
           fi
 
       - name: Build release APK + AAB

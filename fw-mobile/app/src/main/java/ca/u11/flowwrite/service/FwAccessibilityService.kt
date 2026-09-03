@@ -77,7 +77,11 @@ class FwAccessibilityService : AccessibilityService() {
         val node = focusedNode?.takeIf { it.refresh() }
             ?: rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
         return try {
-            node?.text?.toString().orEmpty()
+            // An empty field reports its PLACEHOLDER as the node text (e.g.
+            // WhatsApp's composer reports "Message") — isShowingHintText tells
+            // us the text is a hint, not user content. Never read the hint.
+            if (node == null || node.isShowingHintText) ""
+            else node.text?.toString().orEmpty()
         } finally {
             // Recycle only freshly-obtained nodes — focusedNode is our cached copy.
             if (node != null && node !== focusedNode) node.recycle()
@@ -107,7 +111,10 @@ class FwAccessibilityService : AccessibilityService() {
             }
 
             // Append to the existing content rather than replacing the field.
-            val existing = node.text?.toString().orEmpty()
+            // Guard: an empty field reports its placeholder as the node text
+            // (WhatsApp's composer reports "Message") — the hint is NOT user
+            // content, so never prepend it to the dictated text.
+            val existing = if (node.isShowingHintText) "" else node.text?.toString().orEmpty()
             val combined = when {
                 existing.isEmpty() -> text
                 existing.endsWith(" ") || existing.endsWith("\n") -> existing + text
