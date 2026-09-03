@@ -11,6 +11,10 @@ import ca.u11.flowwrite.data.Template
 import ca.u11.flowwrite.data.UserProfile
 import ca.u11.flowwrite.service.BubblePrefs
 import ca.u11.flowwrite.service.BubbleService
+import ca.u11.flowwrite.service.MicService
+import com.google.firebase.auth.FirebaseAuthRecentLoginRequiredException
+import com.google.firebase.firestore.ktx.firestore
+import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -18,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 
 // ---------------------------------------------------------------------------
 // Navigation destination enum
@@ -165,6 +170,67 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearSignInError() { _signInError.value = null }
+
+    // -----------------------------------------------------------------------
+    // Account deletion (Play User Data policy — in-app deletion required)
+    // -----------------------------------------------------------------------
+
+    /** True while account deletion is running — Settings shows progress. */
+    private val _isDeletingAccount = MutableStateFlow(false)
+    val isDeletingAccount: StateFlow<Boolean> = _isDeletingAccount.asStateFlow()
+
+    /** One-shot deletion failure message — Settings surfaces it as a toast. */
+    private val _deleteAccountError = MutableStateFlow<String?>(null)
+    val deleteAccountError: StateFlow<String?> = _deleteAccountError.asStateFlow()
+
+    fun clearDeleteAccountError() { _deleteAccountError.value = null }
+
+    /**
+     * Permanently deletes the account: best-effort delete of the user's
+     * template docs + users/{uid} doc in Firestore (rules allow owners to
+     * delete their own docs), then the Firebase Auth account. On success the
+     * sign-out path stops the services and wipes local state. Mirrors the iOS
+     * AppModel.deleteAccount / FirebaseREST.deleteAccountData flow.
+     */
+    fun deleteAccount() {
+        val user = auth.currentUser ?: return
+        viewModelScope.launch {
+            _isDeletingAccount.value = true
+            _deleteAccountError.value = null
+            try {
+                // Tear down listeners first so they can't recreate state mid-delete.
+                profileJob?.cancel();  profileJob = null
+                templateJob?.cancel(); templateJob = null
+
+                // Best-effort data deletion — a Firestore failure must not
+                // block deleting the auth account.
+                runCatching {
+                    val db = Firebase.firestore
+                    val tpls = db.collection("users").document(user.uid)
+                        .collection("templates").get().await()
+                    tpls.documents.forEach { runCatching { it.reference.delete().await() } }
+                    db.collection("users").document(user.uid).delete().await()
+                }
+
+                user.delete().await()
+
+                // Success — stop the mic service too (signOut stops the bubble),
+                // then reuse the sign-out path to wipe state and navigate out.
+                val ctx = getApplication<Application>()
+                ctx.stopService(Intent(ctx, MicService::class.java))
+                signOut()
+            } catch (e: FirebaseAuthRecentLoginRequiredException) {
+                // Firebase requires a fresh login for account deletion: sign out
+                // and tell the user (on the sign-in screen) to retry after that.
+                signOut()
+                _signInError.value = "For security, sign in again and retry account deletion"
+            } catch (e: Exception) {
+                _deleteAccountError.value = e.message ?: "Couldn't delete account. Please try again."
+            } finally {
+                _isDeletingAccount.value = false
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Navigation callbacks

@@ -84,7 +84,7 @@ fun HomeScreen(vm: MainViewModel) {
             when (selectedTab) {
                 0 -> DashboardTab(vm, innerPadding)
                 1 -> TemplatesTab(vm, innerPadding)
-                2 -> SettingsTab(innerPadding)
+                2 -> SettingsTab(vm, innerPadding)
             }
         }
     }

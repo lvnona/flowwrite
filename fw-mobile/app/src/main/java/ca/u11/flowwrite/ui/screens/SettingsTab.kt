@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.BubbleChart
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
@@ -46,6 +48,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +69,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import ca.u11.flowwrite.BuildConfig
+import ca.u11.flowwrite.MainViewModel
 
 /**
  * Settings tab — always accessible from HomeScreen bottom nav.
@@ -75,7 +79,7 @@ import ca.u11.flowwrite.BuildConfig
  * time.  Also shows read-only info about the app version.
  */
 @Composable
-fun SettingsTab(innerPadding: PaddingValues) {
+fun SettingsTab(vm: MainViewModel, innerPadding: PaddingValues) {
     val context = LocalContext.current
 
     // Privacy sub-screen
@@ -251,6 +255,13 @@ fun SettingsTab(innerPadding: PaddingValues) {
         SectionHeader("Diagnostics")
         Spacer(Modifier.height(8.dp))
         DiagnosticsCard(tick)
+
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(20.dp))
+
+        // Delete account — Play User Data policy requires an in-app path.
+        DeleteAccountRow(vm)
 
         Spacer(Modifier.height(24.dp))
     }
@@ -465,6 +476,89 @@ private fun DiagnosticsCard(tick: Int) {
                     onClick = { clipboard.setText(AnnotatedString(dump)) },
                     modifier = Modifier.align(Alignment.End),
                 ) { Text("Copy") }
+            }
+        }
+    }
+}
+
+/**
+ * Destructive "Delete account" row with a confirmation dialog. On success the
+ * VM's sign-out path navigates away; on failure a toast shows the error.
+ */
+@Composable
+private fun DeleteAccountRow(vm: MainViewModel) {
+    val context = LocalContext.current
+    val isDeleting  by vm.isDeletingAccount.collectAsState()
+    val deleteError by vm.deleteAccountError.collectAsState()
+    var showConfirm by remember { mutableStateOf(false) }
+
+    LaunchedEffect(deleteError) {
+        if (deleteError != null) {
+            Toast.makeText(context, deleteError, Toast.LENGTH_LONG).show()
+            vm.clearDeleteAccountError()
+            showConfirm = false
+        }
+    }
+
+    if (showConfirm) {
+        AlertDialog(
+            onDismissRequest = { if (!isDeleting) showConfirm = false },
+            title = { Text("Delete your account?") },
+            text = {
+                Text("This permanently deletes your FlowWrite account, templates, " +
+                    "and usage history. You can't undo this.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { vm.deleteAccount() },
+                    enabled = !isDeleting,
+                ) {
+                    Text(
+                        if (isDeleting) "Deleting…" else "Delete",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showConfirm = false },
+                    enabled = !isDeleting,
+                ) { Text("Cancel") }
+            },
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .clickable(enabled = !isDeleting) { showConfirm = true },
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Filled.Delete, null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(26.dp),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Delete account",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    "Permanently deletes your account and all data",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

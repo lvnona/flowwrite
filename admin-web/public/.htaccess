@@ -25,6 +25,9 @@ RewriteRule ^ - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 # ── Pretty URL for the admin panel ───────────────────────────────────────────
 RewriteRule ^admin/?$ admin.html [L]
 
+# ── Pretty URL for the account deletion page ─────────────────────────────────
+RewriteRule ^delete-account/?$ delete-account.html [L]
+
 # ── Serve real files/dirs directly; otherwise fall back to the landing page ──
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
