@@ -106,12 +106,30 @@ class FwAccessibilityService : AccessibilityService() {
                 return
             }
 
-            // Append to the existing content rather than replacing the field.
-            // existingTextOf filters out placeholders/labels that aren't real
-            // user content, so nothing is ever prepended to the dictation.
+            // Append/insert into the existing content rather than replacing
+            // the field. existingTextOf filters out placeholders/labels that
+            // aren't real user content, so nothing is ever prepended.
             val existing = existingTextOf(node)
+            val selStart = node.textSelectionStart
+            val selEnd   = node.textSelectionEnd
+            val canInsertAtCursor = existing.isNotEmpty() &&
+                selStart >= 0 && selEnd >= selStart && selEnd <= existing.length
+
+            var cursorAfter = -1
             val combined = when {
+                // Untouched field (or only a placeholder) — just the dictation.
                 existing.isEmpty() -> text
+                // Insert at the cursor, like a keyboard would — keeps content
+                // after the cursor (e.g. Samsung Email's "Sent from my Galaxy"
+                // signature) after the dictated text instead of mangling it.
+                canInsertAtCursor -> {
+                    val before = existing.substring(0, selStart)
+                    val after  = existing.substring(selEnd)
+                    val sep = if (before.isNotEmpty() && !before.last().isWhitespace()) " " else ""
+                    cursorAfter = before.length + sep.length + text.length
+                    before + sep + text + after
+                }
+                // No valid cursor — append at the end with one separating space.
                 existing.last().isWhitespace() -> existing + text
                 else -> "$existing $text"
             }
@@ -129,6 +147,17 @@ class FwAccessibilityService : AccessibilityService() {
                 // Fallback: clipboard + paste
                 copyToClipboard(text)
                 node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+            } else if (cursorAfter >= 0) {
+                // Put the cursor right after the inserted text so consecutive
+                // dictations continue from there. Best-effort — some fields
+                // reject SET_SELECTION, which is harmless.
+                node.performAction(
+                    AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                    Bundle().apply {
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursorAfter)
+                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursorAfter)
+                    },
+                )
             }
         } finally {
             if (node != null && node !== focusedNode) node.recycle()
