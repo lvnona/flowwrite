@@ -150,7 +150,14 @@ export default function DictationBar() {
           setTimeout(() => { window.flowwrite?.dictationCancel?.(); setState('idle'); }, 2200);
           return;
         }
-        if (res && !res.ok) setErrorMsg(res.error || 'No speech detected');
+        if (res && !res.ok) {
+          // Show real failures (e.g. an expired session) instead of silently
+          // reverting to idle, which used to leave the user with no feedback.
+          setErrorMsg(res.error || 'No speech detected');
+          setState('error');
+          setTimeout(() => { window.flowwrite?.dictationCancel?.(); setState('idle'); }, 2200);
+          return;
+        }
         await window.flowwrite?.dictationCancel?.();
         setState('idle');
         return;

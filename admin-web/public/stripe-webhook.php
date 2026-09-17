@@ -62,11 +62,25 @@ $event = json_decode($payload, true);
 $type  = $event['type'] ?? '';
 $obj   = $event['data']['object'] ?? [];
 
-// Helper: set a user's plan + subscription fields.
+// This endpoint is registered for the LIVE Stripe account. Ignore any stray
+// test-mode event a leftover/misconfigured test webhook might still send here
+// — a test-mode checkout has no real payment behind it and must never flip a
+// real plan or trigger an owner "new subscriber" alert.
+if (($event['livemode'] ?? null) !== true) {
+  http_response_code(200);
+  echo 'ignored (test mode)';
+  exit;
+}
+
+// Helper: set a user's plan + subscription fields. Returns true only if the
+// uid was valid AND the Firestore write actually succeeded — callers use this
+// to gate side effects (like the owner-alert email) on a real update, not just
+// on receiving a well-formed webhook event.
 function fw_set_plan($cfg, $uid, $plan, $extra = []) {
-  if (!$uid) return;
+  if (!$uid) return false;
   $fields = array_merge(['plan' => $plan], $extra);
-  fw_patch_user($cfg, $uid, $fields);
+  list($code) = fw_patch_user($cfg, $uid, $fields);
+  return $code >= 200 && $code < 300;
 }
 
 // Extract current_period_end from a subscription object across Stripe API
@@ -115,10 +129,14 @@ try {
       $cpe = fw_period_end($sub);
       if ($cpe > 0) $extra['currentPeriodEnd'] = $cpe;
     }
-    fw_set_plan($cfg, $uid, 'pro', $extra);
-    // Alert the owner that someone just subscribed (best-effort).
-    $custEmail = $obj['customer_details']['email'] ?? $obj['customer_email'] ?? 'unknown';
-    fw_notify_owner($MAIL, $custEmail, $uid);
+    $updated = fw_set_plan($cfg, $uid, 'pro', $extra);
+    // Alert the owner that someone just subscribed — only for a real, applied
+    // upgrade. A checkout with an invalid/missing uid never touched Firestore,
+    // so it must not generate a "new Pro subscriber" alert either.
+    if ($updated) {
+      $custEmail = $obj['customer_details']['email'] ?? $obj['customer_email'] ?? 'unknown';
+      fw_notify_owner($MAIL, $custEmail, $uid);
+    }
   } elseif ($type === 'customer.subscription.created'
          || $type === 'customer.subscription.updated'
          || $type === 'customer.subscription.deleted') {

@@ -1,15 +1,23 @@
 <?php
 // Opens the Stripe Customer Portal so a Pro user can update their card or
-// cancel. Called by the app: /billing-portal.php?uid=<firebase_uid>
+// cancel. Called by the app: /billing-portal.php?token=<firebase_id_token>
 //
 // Looks up the user's stripeCustomerId in Firestore, creates a portal session,
-// and redirects to it.
+// and redirects to it. The uid is verified from the token server-side — never
+// trusted from a client-supplied parameter — so this can only ever open the
+// signed-in caller's own billing portal, not anyone else's.
 
 require __DIR__ . '/_firebase.php';
+require __DIR__ . '/_auth.php';
 $cfg = fw_load_config();   // local bootstrap + Firestore config/billing overlay
 
-$uid = isset($_GET['uid']) ? trim($_GET['uid']) : '';
-if ($uid === '') { http_response_code(400); echo 'Missing uid'; exit; }
+try {
+  $uid = fw_authed_uid($_GET['token'] ?? '');
+} catch (Exception $e) {
+  http_response_code(401);
+  echo 'Not signed in — open FlowWrite and sign in again, then retry.';
+  exit;
+}
 
 $fields = fw_get_user($cfg, $uid);
 $customer = $fields['stripeCustomerId']['stringValue'] ?? '';

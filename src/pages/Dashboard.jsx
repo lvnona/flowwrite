@@ -10,7 +10,7 @@ import { useHistory } from '../hooks/useHistory.js';
 import { useAuth } from '../hooks/useAuth.js';
 import { thisWeekKey } from '../utils/usageTracking.js';
 import { checkoutUrl, portalUrl } from '../utils/billing.js';
-import { getFirebaseFirestore } from '../utils/firebase.js';
+import { getFirebaseFirestore, getFirebaseAuth } from '../utils/firebase.js';
 import { isConfigured } from '../utils/firebaseConfig.js';
 import NavBar from '../components/NavBar.jsx';
 
@@ -76,11 +76,13 @@ export default function Dashboard() {
     audioWords: profile?.audioWordsWeekly?.[thisWeekKey()] || 0,
   }), [profile]);
 
-  function openUpgrade() {
-    window.flowwrite?.openExternal?.(checkoutUrl(user?.uid, user?.email));
+  async function openUpgrade() {
+    const token = await getFirebaseAuth()?.currentUser?.getIdToken?.().catch(() => '');
+    window.flowwrite?.openExternal?.(checkoutUrl(token, user?.email));
   }
-  function openManage() {
-    window.flowwrite?.openExternal?.(portalUrl(user?.uid));
+  async function openManage() {
+    const token = await getFirebaseAuth()?.currentUser?.getIdToken?.().catch(() => '');
+    window.flowwrite?.openExternal?.(portalUrl(token));
   }
 
   // Cloud-side counters are the source of truth (server enforces them). The

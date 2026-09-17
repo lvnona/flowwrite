@@ -1338,6 +1338,10 @@ ipcMain.handle('transcribe-audio', async (_event, { audio, mimeType, idToken } =
         error: `You've used all ${data.limit ?? ''} free dictated words this week.`,
       };
     }
+    if (status === 401) {
+      // The cached fwIdToken (pushed by the popup window) has expired.
+      return { ok: false, error: 'Session expired — open FlowWrite from the tray to refresh, then try again.' };
+    }
     if (status !== 200 || !data.ok) {
       return { ok: false, error: data.error || data.detail || `Server error (${status})` };
     }

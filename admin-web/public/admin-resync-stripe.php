@@ -25,8 +25,11 @@ $body   = json_decode(file_get_contents('php://input'), true) ?: [];
 $uid    = trim($body['uid']    ?? '');
 $secret = (string)($body['secret'] ?? '');
 
-$inviteSecret = ($cfg['invite_secret'] ?? '') ?: 'DHJRpGdj77RekFrC-uuApFerIFvuwUo5nt_gW9jzEDI';
-if (!hash_equals($inviteSecret, $secret)) {
+// No hardcoded fallback — a shared secret only protects this endpoint if it's
+// actually unguessable, so an unset secret rejects every request instead of
+// silently accepting them.
+$inviteSecret = (string)($cfg['invite_secret'] ?? '');
+if ($inviteSecret === '' || !hash_equals($inviteSecret, $secret)) {
   http_response_code(403); echo json_encode(['error' => 'Invalid admin secret.']); exit;
 }
 if ($uid === '') {

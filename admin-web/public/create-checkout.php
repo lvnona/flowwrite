@@ -2,16 +2,23 @@
 // Creates a Stripe Checkout Session for the FlowWrite Pro subscription and
 // redirects the browser to Stripe's hosted payment page.
 //
-// Called by the app: /create-checkout.php?uid=<firebase_uid>&email=<email>
-// The uid is attached as client_reference_id AND on the subscription metadata,
-// so the webhook can map every future subscription event back to the user.
+// Called by the app: /create-checkout.php?token=<firebase_id_token>&email=<email>
+// The uid (verified server-side from the token, never trusted from the client)
+// is attached as client_reference_id AND on the subscription metadata, so the
+// webhook can map every future subscription event back to the user.
 
 require __DIR__ . '/_firebase.php';
+require __DIR__ . '/_auth.php';
 $cfg = fw_load_config();   // local bootstrap + Firestore config/billing overlay
 
-$uid   = isset($_GET['uid']) ? trim($_GET['uid']) : '';
+try {
+  $uid = fw_authed_uid($_GET['token'] ?? '');
+} catch (Exception $e) {
+  http_response_code(401);
+  echo 'Not signed in — open FlowWrite and sign in again, then retry.';
+  exit;
+}
 $email = isset($_GET['email']) ? trim($_GET['email']) : '';
-if ($uid === '') { http_response_code(400); echo 'Missing uid'; exit; }
 
 // Build the form-encoded params for Stripe's API (nested keys use [] notation).
 $params = [

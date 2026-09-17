@@ -28,6 +28,12 @@ export function createPopupWindow() {
       preload: join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
+      // This hidden window is the only renderer that refreshes the Firebase ID
+      // token (every 4 min) for the Fn dictation bar, which has no auth context
+      // of its own. Chromium throttles/freezes timers in occluded windows, so
+      // without this the token goes stale after ~1h and dictation fails silently
+      // until the popup is opened once to force a fresh token push.
+      backgroundThrottling: false,
     },
   });
 

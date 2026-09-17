@@ -17,14 +17,15 @@
  */
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-// All settings (SMTP credentials, invite secret) now live in Firestore
-// (config/billing) and are edited from the admin panel's Config tab. The
-// hardcoded INVITE_SECRET below is only a fallback if Firestore has none set.
+// SMTP credentials + invite secret live in Firestore (config/billing), edited
+// from the admin panel's Config tab. There is no hardcoded fallback secret —
+// a shared secret only protects this endpoint if it's actually unguessable,
+// so if it's unset, requests are rejected rather than silently accepted.
 require __DIR__ . '/_firebase.php';
 require __DIR__ . '/_mailer.php';
 $cfg  = fw_load_config();
 $MAIL = fw_mail_cfg($cfg);
-$INVITE_SECRET = ($cfg['invite_secret'] ?? '') ?: 'DHJRpGdj77RekFrC-uuApFerIFvuwUo5nt_gW9jzEDI';
+$INVITE_SECRET = (string)($cfg['invite_secret'] ?? '');
 $TEMPLATE_FILE = __DIR__ . '/invite-email.html';
 $DEFAULT_LINK  = 'https://flowwrite.u11.ca/welcome.html';
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ $email  = trim($body['email']  ?? '');
 $link   = trim($body['link']   ?? $DEFAULT_LINK);
 $secret = (string)($body['secret'] ?? '');
 
-if (!hash_equals($INVITE_SECRET, $secret)) {
+if ($INVITE_SECRET === '' || !hash_equals($INVITE_SECRET, $secret)) {
   http_response_code(403); echo json_encode(['error' => 'Invalid invite key.']); exit;
 }
 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {

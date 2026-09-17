@@ -7,15 +7,19 @@
 
 const SITE = 'https://flowwrite.u11.ca';
 
-/** Where "Upgrade to Pro" sends the user — creates a Stripe Checkout session. */
-export function checkoutUrl(uid, email) {
-  const q = new URLSearchParams({ uid: uid || '', email: email || '' });
+/**
+ * Where "Upgrade to Pro" sends the user — creates a Stripe Checkout session.
+ * Takes a fresh Firebase ID token (not a raw uid) so the server verifies who's
+ * asking instead of trusting a client-supplied value.
+ */
+export function checkoutUrl(idToken, email) {
+  const q = new URLSearchParams({ token: idToken || '', email: email || '' });
   return `${SITE}/create-checkout.php?${q.toString()}`;
 }
 
 /** Where "Manage subscription" sends the user — Stripe Customer Portal. */
-export function portalUrl(uid) {
-  const q = new URLSearchParams({ uid: uid || '' });
+export function portalUrl(idToken) {
+  const q = new URLSearchParams({ token: idToken || '' });
   return `${SITE}/billing-portal.php?${q.toString()}`;
 }
 
