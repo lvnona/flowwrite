@@ -14,7 +14,10 @@ on:
 jobs:
   # ── macOS (arm64 — Apple Silicon) ─────────────────────────────────────────
   build-mac:
-    runs-on: macos-latest
+    # Pinned, not macos-latest: the runner rolled to Darwin 25.6 in Sept 2026 and
+    # electron-builder 25.x fails there at `security set-key-partition-list`
+    # ("SecKeychainUnlock: passphrase not correct") before signing even starts.
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
